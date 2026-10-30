@@ -91,4 +91,5 @@ Interactive API docs: http://127.0.0.1:8000/docs.
 - **DNS rebinding**: destinations are resolved and checked before each request, but the connection is not pinned to the
   checked IP; run the app behind an egress proxy/firewall in production.
 
-See `docs/ARCHITECTURE.md` for the data model, trust boundaries and the configuration format.
+See **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** for a full explanation of every feature and the three roles, and
+`docs/ARCHITECTURE.md` for the data model, trust boundaries and the configuration format.
