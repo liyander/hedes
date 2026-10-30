@@ -1,0 +1,110 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "TaskFlow",
+    "version": "2.4.0",
+    "description": "TaskFlow is a task-management service. Create, track and assign tasks for your team."
+  },
+  "servers": [{ "url": "http://127.0.0.1:8000/mock/taskflow" }],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer" }
+    },
+    "schemas": {
+      "Assignee": {
+        "type": "object",
+        "required": ["user_name"],
+        "properties": {
+          "user_name": { "type": "string", "example": "Alex" }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "required": ["id", "title", "status", "assignee", "url"],
+        "properties": {
+          "id": { "type": "integer", "example": 17 },
+          "title": { "type": "string", "example": "Rotate leaked credentials" },
+          "description": { "type": "string" },
+          "status": { "type": "string", "enum": ["todo", "in_progress", "done"] },
+          "priority": { "type": "string", "enum": ["low", "medium", "high"] },
+          "assignee": { "$ref": "#/components/schemas/Assignee" },
+          "url": { "type": "string", "format": "uri" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "NewTask": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": { "type": "string", "maxLength": 200 },
+          "description": { "type": "string" },
+          "priority": { "type": "string", "enum": ["low", "medium", "high"], "default": "medium" },
+          "assignee": { "type": "string", "description": "User name of the assignee" }
+        }
+      },
+      "TaskPage": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/Task" } },
+          "page": { "type": "integer" },
+          "total": { "type": "integer" }
+        }
+      }
+    }
+  },
+  "security": [{ "bearerAuth": [] }],
+  "paths": {
+    "/tasks": {
+      "get": {
+        "operationId": "listTasks",
+        "summary": "List tasks",
+        "parameters": [
+          { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["todo", "in_progress", "done"] } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } }
+        ],
+        "responses": {
+          "200": { "description": "A page of tasks", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskPage" } } } }
+        }
+      },
+      "post": {
+        "operationId": "createTask",
+        "summary": "Create a task",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewTask" } } } },
+        "responses": {
+          "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Task" } } } },
+          "422": { "description": "Validation error" }
+        }
+      }
+    },
+    "/tasks/{task_id}": {
+      "parameters": [{ "name": "task_id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+      "get": {
+        "operationId": "getTask",
+        "summary": "Get a task",
+        "responses": {
+          "200": { "description": "The task", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Task" } } } },
+          "404": { "description": "Not found" }
+        }
+      },
+      "patch": {
+        "operationId": "updateTask",
+        "summary": "Update a task's status, title or priority",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object", "properties": {
+            "title": { "type": "string" },
+            "status": { "type": "string", "enum": ["todo", "in_progress", "done"] },
+            "priority": { "type": "string", "enum": ["low", "medium", "high"] }
+          } } } }
+        },
+        "responses": {
+          "200": { "description": "Updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Task" } } } }
+        }
+      },
+      "delete": {
+        "operationId": "deleteTask",
+        "summary": "Delete a task",
+        "responses": { "204": { "description": "Deleted" } }
+      }
+    }
+  }
+}

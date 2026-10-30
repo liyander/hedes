@@ -1,0 +1,43 @@
+schema_version: "1.0"
+integration:
+  id: notify
+  name: Notify (team alerts)
+  version: "1.0.0"
+  transport: http
+  description: Bundled mock notification service - send alerts to team channels. Uses API-key auth.
+  base_url: ${PUBLIC_BASE_URL}/mock/notify
+  authentication:
+    type: api_key_header
+    header_name: X-API-Key
+    credential_ref: notify
+  operations:
+    - id: send_message
+      description: Send an alert message to a team channel (notify a channel)
+      method: POST
+      path: /messages
+      input_schema:
+        type: object
+        required: [channel, text]
+        properties:
+          channel: {type: string, description: "e.g. security-team"}
+          text: {type: string}
+          severity: {type: string, enum: [info, warning, critical], default: info}
+      request:
+        json_body: {channel: "${inputs.channel}", text: "${inputs.text}", severity: "${inputs.severity}"}
+      response:
+        status_codes: [201]
+        mapping: {message_id: "$.id", delivered: "$.delivered", channel: "$.channel"}
+    - id: list_messages
+      description: List recent messages
+      method: GET
+      path: /messages
+      input_schema:
+        type: object
+        properties:
+          channel: {type: string}
+      request:
+        query: {channel: "${inputs.channel}"}
+      response:
+        status_codes: [200]
+        items_path: "$.items"
+        mapping: {id: "$.id", channel: "$.channel", text: "$.text", severity: "$.severity"}

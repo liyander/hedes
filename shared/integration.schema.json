@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://integra.ai/schemas/integration-1.0.json",
+  "title": "IntegraAI integration configuration",
+  "type": "object",
+  "required": ["schema_version", "integration"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "integration": {
+      "type": "object",
+      "required": ["id", "name", "version", "transport", "base_url", "authentication", "operations"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "transport": { "const": "http" },
+        "base_url": { "type": "string", "pattern": "^https?://[^\\s/$.?#][^\\s]*$", "maxLength": 500 },
+        "timeout_seconds": { "type": "number", "minimum": 1, "maximum": 60 },
+        "default_headers": { "$ref": "#/$defs/headers" },
+        "authentication": {
+          "type": "object",
+          "required": ["type"],
+          "additionalProperties": false,
+          "properties": {
+            "type": { "enum": ["none", "bearer", "api_key_header", "api_key_query", "basic"] },
+            "credential_ref": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+            "header_name": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" },
+            "param_name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
+            "scopes": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": { "$ref": "#/$defs/operation" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "headers": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9-]{1,64}$" },
+      "additionalProperties": { "type": "string", "maxLength": 1000 }
+    },
+    "operation": {
+      "type": "object",
+      "required": ["id", "method", "path", "input_schema", "response"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$" },
+        "description": { "type": "string", "maxLength": 1000 },
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+        "path": { "type": "string", "pattern": "^/[^\\s]*$", "maxLength": 500 },
+        "safety": { "enum": ["read", "write", "destructive"] },
+        "idempotent": { "type": "boolean" },
+        "timeout_seconds": { "type": "number", "minimum": 1, "maximum": 60 },
+        "input_schema": {
+          "type": "object",
+          "required": ["type"],
+          "properties": { "type": { "const": "object" } }
+        },
+        "request": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path_params": { "type": "object", "additionalProperties": { "type": "string" } },
+            "query": { "type": "object" },
+            "headers": { "$ref": "#/$defs/headers" },
+            "json_body": {},
+            "form_body": { "type": "object" }
+          }
+        },
+        "pagination": {
+          "type": "object",
+          "required": ["type"],
+          "additionalProperties": false,
+          "properties": {
+            "type": { "enum": ["page", "cursor"] },
+            "page_param": { "type": "string" },
+            "size_param": { "type": "string" },
+            "size": { "type": "integer", "minimum": 1, "maximum": 500 },
+            "cursor_param": { "type": "string" },
+            "next_cursor_path": { "type": "string" },
+            "max_pages": { "type": "integer", "minimum": 1, "maximum": 20 }
+          }
+        },
+        "retry": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_attempts": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "backoff_seconds": { "type": "number", "minimum": 0, "maximum": 30 }
+          }
+        },
+        "response": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "format": { "enum": ["json", "text"] },
+            "status_codes": { "type": "array", "items": { "type": "integer", "minimum": 100, "maximum": 599 }, "minItems": 1 },
+            "items_path": { "type": "string" },
+            "mapping": { "type": "object", "additionalProperties": { "type": "string" } },
+            "optional_fields": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}

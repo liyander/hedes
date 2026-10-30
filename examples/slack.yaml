@@ -1,0 +1,43 @@
+schema_version: "1.0"
+integration:
+  id: slack
+  name: Slack Messaging
+  version: "1.0.0"
+  transport: http
+  description: Post messages to Slack channels with a bot token.
+  base_url: https://slack.com/api
+  authentication:
+    type: bearer
+    credential_ref: slack
+    scopes: [chat:write]
+  operations:
+    - id: post_message
+      description: Post a message to a Slack channel (notify a channel)
+      method: POST
+      path: /chat.postMessage
+      input_schema:
+        type: object
+        required: [channel, text]
+        properties:
+          channel: {type: string, description: "Channel ID or name, e.g. #security"}
+          text: {type: string}
+      request:
+        json_body: {channel: "${inputs.channel}", text: "${inputs.text}"}
+      response:
+        status_codes: [200]
+        mapping: {ok: "$.ok", channel: "$.channel", ts: "$.ts"}
+        optional_fields: [channel, ts]
+    - id: list_channels
+      description: List public channels
+      method: GET
+      path: /conversations.list
+      input_schema:
+        type: object
+        properties:
+          limit: {type: integer, default: 100}
+      request:
+        query: {limit: "${inputs.limit}"}
+      response:
+        status_codes: [200]
+        items_path: "$.channels"
+        mapping: {id: "$.id", name: "$.name"}

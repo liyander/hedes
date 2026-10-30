@@ -1,0 +1,73 @@
+schema_version: "1.0"
+integration:
+  id: github
+  name: GitHub Issues
+  version: "1.0.0"
+  transport: http
+  description: Create, list and comment on GitHub issues through the GitHub REST API.
+  base_url: https://api.github.com
+  default_headers:
+    Accept: application/vnd.github+json
+    X-GitHub-Api-Version: "2022-11-28"
+  authentication:
+    type: bearer
+    credential_ref: github
+    scopes: [issues:write]
+  operations:
+    - id: create_issue
+      description: Create a GitHub issue
+      method: POST
+      path: /repos/{owner}/{repo}/issues
+      input_schema:
+        type: object
+        required: [owner, repo, title]
+        properties:
+          owner: {type: string, description: Repository owner}
+          repo: {type: string, description: Repository name}
+          title: {type: string}
+          body: {type: string}
+          labels: {type: array, items: {type: string}}
+      request:
+        path_params: {owner: "${inputs.owner}", repo: "${inputs.repo}"}
+        json_body: {title: "${inputs.title}", body: "${inputs.body}", labels: "${inputs.labels}"}
+      response:
+        status_codes: [201]
+        mapping: {issue_id: "$.id", issue_number: "$.number", issue_url: "$.html_url"}
+    - id: list_issues
+      description: List open issues in a repository
+      method: GET
+      path: /repos/{owner}/{repo}/issues
+      input_schema:
+        type: object
+        required: [owner, repo]
+        properties:
+          owner: {type: string}
+          repo: {type: string}
+          labels: {type: string, description: Comma separated label names}
+          state: {type: string, enum: [open, closed, all], default: open}
+      request:
+        path_params: {owner: "${inputs.owner}", repo: "${inputs.repo}"}
+        query: {labels: "${inputs.labels}", state: "${inputs.state}"}
+      pagination: {type: page, page_param: page, size_param: per_page, size: 50, max_pages: 3}
+      response:
+        status_codes: [200]
+        items_path: "$"
+        mapping: {number: "$.number", title: "$.title", url: "$.html_url", state: "$.state"}
+    - id: add_comment
+      description: Comment on an issue
+      method: POST
+      path: /repos/{owner}/{repo}/issues/{issue_number}/comments
+      input_schema:
+        type: object
+        required: [owner, repo, issue_number, body]
+        properties:
+          owner: {type: string}
+          repo: {type: string}
+          issue_number: {type: integer}
+          body: {type: string}
+      request:
+        path_params: {owner: "${inputs.owner}", repo: "${inputs.repo}", issue_number: "${inputs.issue_number}"}
+        json_body: {body: "${inputs.body}"}
+      response:
+        status_codes: [201]
+        mapping: {comment_id: "$.id", comment_url: "$.html_url"}

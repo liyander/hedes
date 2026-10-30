@@ -1,0 +1,192 @@
+"""Structural (JSON Schema) and semantic validation of integration configurations and workflow graphs."""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import re
+from functools import lru_cache
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
+
+from ..core.config import SHARED_DIR
+from . import jsonpath, templates
+
+SAFE_BY_METHOD = {"GET": "read", "POST": "write", "PUT": "write", "PATCH": "write", "DELETE": "destructive"}
+FORBIDDEN_HEADERS = {"authorization", "cookie", "host", "content-length", "transfer-encoding", "connection",
+                     "proxy-authorization", "x-forwarded-for", "x-forwarded-host", "x-real-ip"}
+
+
+@lru_cache
+def _schema(name: str) -> Draft202012Validator:
+    return Draft202012Validator(json.loads((SHARED_DIR / name).read_text()))
+
+
+def config_hash(config: dict) -> str:
+    return hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def normalize_config(config: dict) -> dict:
+    """Fill in defaults that are implied by the format so stored versions are explicit."""
+    cfg = copy.deepcopy(config)
+    integ = cfg.get("integration") or {}
+    if isinstance(integ.get("base_url"), str):
+        integ["base_url"] = integ["base_url"].rstrip("/")
+    for op in integ.get("operations") or []:
+        if isinstance(op, dict) and isinstance(op.get("method"), str):
+            op["method"] = op["method"].upper()
+            op.setdefault("safety", SAFE_BY_METHOD.get(op["method"], "write"))
+    return cfg
+
+
+def _path(err) -> str:
+    return "/".join(str(p) for p in err.absolute_path) or "(root)"
+
+
+def validate_config(config: dict) -> dict:
+    errors: list[dict] = []
+    warnings: list[dict] = []
+    for err in sorted(_schema("integration.schema.json").iter_errors(config), key=lambda e: list(e.absolute_path)):
+        errors.append({"path": _path(err), "message": err.message[:300]})
+    if errors:
+        return {"valid": False, "errors": errors, "warnings": warnings}
+
+    integ = config["integration"]
+    auth = integ["authentication"]
+    if auth["type"] != "none" and not auth.get("credential_ref"):
+        errors.append({"path": "integration/authentication", "message": "credential_ref is required when authentication is used"})
+    if auth["type"] == "api_key_header" and not auth.get("header_name"):
+        errors.append({"path": "integration/authentication", "message": "header_name is required for api_key_header"})
+    if auth["type"] == "api_key_query" and not auth.get("param_name"):
+        errors.append({"path": "integration/authentication", "message": "param_name is required for api_key_query"})
+    for h in (integ.get("default_headers") or {}):
+        if h.lower() in FORBIDDEN_HEADERS:
+            errors.append({"path": "integration/default_headers", "message": f"Header {h!r} may not be set by configuration"})
+
+    seen: set[str] = set()
+    for i, op in enumerate(integ["operations"]):
+        where = f"integration/operations/{i} ({op['id']})"
+        if op["id"] in seen:
+            errors.append({"path": where, "message": "Duplicate operation id"})
+        seen.add(op["id"])
+        try:
+            Draft202012Validator.check_schema(op["input_schema"])
+        except SchemaError as e:
+            errors.append({"path": where + "/input_schema", "message": f"Invalid JSON Schema: {e.message[:200]}"})
+        props = (op["input_schema"].get("properties") or {})
+        req = op.get("request") or {}
+        placeholders = set(re.findall(r"\{([A-Za-z0-9_]+)\}", op["path"]))
+        path_params = req.get("path_params") or {}
+        for ph in placeholders - set(path_params):
+            errors.append({"path": where + "/request/path_params", "message": f"Path placeholder {{{ph}}} has no path_params entry"})
+        for extra in set(path_params) - placeholders:
+            warnings.append({"path": where + "/request/path_params", "message": f"path_params.{extra} is not used in the path"})
+        for h in (req.get("headers") or {}):
+            if h.lower() in FORBIDDEN_HEADERS:
+                errors.append({"path": where + "/request/headers", "message": f"Header {h!r} may not be set by configuration"})
+        if req.get("json_body") is not None and req.get("form_body") is not None:
+            errors.append({"path": where + "/request", "message": "Use either json_body or form_body, not both"})
+        if op["method"] == "GET" and (req.get("json_body") is not None or req.get("form_body") is not None):
+            warnings.append({"path": where + "/request", "message": "GET requests with a body are often ignored by servers"})
+        try:
+            for ref in templates.references(req):
+                root, segs = templates.split_ref(ref)
+                if root != "inputs":
+                    errors.append({"path": where + "/request", "message": f"${{{ref}}}: only inputs.* may be referenced"})
+                elif not segs or segs[0] not in props:
+                    errors.append({"path": where + "/request", "message": f"${{{ref}}} refers to an input not declared in input_schema"})
+        except templates.TemplateError as e:
+            errors.append({"path": where + "/request", "message": str(e)})
+        resp = op["response"]
+        for name, path in (resp.get("mapping") or {}).items():
+            try:
+                jsonpath.parse(path)
+            except jsonpath.JSONPathError as e:
+                errors.append({"path": where + f"/response/mapping/{name}", "message": str(e)})
+        if resp.get("items_path"):
+            try:
+                jsonpath.parse(resp["items_path"])
+            except jsonpath.JSONPathError as e:
+                errors.append({"path": where + "/response/items_path", "message": str(e)})
+        if op.get("retry", {}).get("max_attempts", 1) > 1 and op["method"] in ("POST", "PATCH") and not op.get("idempotent"):
+            warnings.append({"path": where + "/retry", "message": "Retries are ignored for non-idempotent operations"})
+        pag = op.get("pagination")
+        if pag and not resp.get("items_path"):
+            errors.append({"path": where + "/pagination", "message": "Paginated operations need response.items_path"})
+        if pag and pag["type"] == "cursor" and not (pag.get("cursor_param") and pag.get("next_cursor_path")):
+            errors.append({"path": where + "/pagination", "message": "Cursor pagination needs cursor_param and next_cursor_path"})
+        if not resp.get("mapping"):
+            warnings.append({"path": where + "/response", "message": "No output mapping: the raw response body will be returned"})
+    return {"valid": not errors, "errors": errors, "warnings": warnings}
+
+
+def validate_workflow_graph(graph: dict, known_tools: dict[str, dict]) -> dict:
+    """known_tools: {tool_name: {"input_schema": ..., "output_fields": [...]}} for published, enabled tools."""
+    errors: list[dict] = []
+    warnings: list[dict] = []
+    for err in _schema("workflow.schema.json").iter_errors(graph):
+        errors.append({"path": _path(err), "message": err.message[:300]})
+    if errors:
+        return {"valid": False, "errors": errors, "warnings": warnings, "order": []}
+    ids = [n["id"] for n in graph["nodes"]]
+    if len(ids) != len(set(ids)):
+        errors.append({"path": "nodes", "message": "Node ids must be unique"})
+    node_ids = set(ids)
+    for n in graph["nodes"]:
+        where = f"nodes/{n['id']}"
+        for d in n.get("depends_on") or []:
+            if d not in node_ids:
+                errors.append({"path": where, "message": f"depends_on references unknown node {d!r}"})
+        tool = known_tools.get(n["tool"])
+        if not tool:
+            warnings.append({"path": where, "message": f"Tool {n['tool']!r} is not published or not available to you yet"})
+        else:
+            required = set((tool["input_schema"] or {}).get("required") or [])
+            missing = required - set((n.get("inputs") or {}).keys())
+            if missing:
+                errors.append({"path": where, "message": f"Missing required inputs: {', '.join(sorted(missing))}"})
+        try:
+            refs = templates.references(n.get("inputs") or {}) + templates.references([c.get("left", "") for c in n.get("when") or []])
+        except templates.TemplateError as e:
+            errors.append({"path": where, "message": str(e)})
+            continue
+        for ref in refs:
+            root, segs = templates.split_ref(ref)
+            if root == "trigger":
+                continue
+            if root != "steps" or not segs:
+                errors.append({"path": where, "message": f"${{{ref}}}: only trigger.* and steps.<id>.output.* may be referenced"})
+            elif segs[0] not in node_ids:
+                errors.append({"path": where, "message": f"${{{ref}}} refers to unknown step {segs[0]!r}"})
+            elif segs[0] not in _ancestors(graph, n["id"]):
+                errors.append({"path": where, "message": f"${{{ref}}}: step {segs[0]!r} must be listed (directly or transitively) in depends_on"})
+    order = topo_layers(graph) if not errors else []
+    if not errors and not order:
+        errors.append({"path": "nodes", "message": "The graph contains a cycle"})
+    return {"valid": not errors, "errors": errors, "warnings": warnings, "order": order}
+
+
+def _ancestors(graph: dict, node_id: str) -> set[str]:
+    deps = {n["id"]: set(n.get("depends_on") or []) for n in graph["nodes"]}
+    seen: set[str] = set()
+    stack = list(deps.get(node_id, ()))
+    while stack:
+        d = stack.pop()
+        if d not in seen:
+            seen.add(d)
+            stack.extend(deps.get(d, ()))
+    return seen
+
+
+def topo_layers(graph: dict) -> list[list[str]]:
+    """Kahn layering: each layer's nodes are independent and can run in parallel. [] on a cycle."""
+    deps = {n["id"]: set(n.get("depends_on") or []) for n in graph["nodes"]}
+    layers, done = [], set()
+    while len(done) < len(deps):
+        layer = sorted(n for n, d in deps.items() if n not in done and d <= done)
+        if not layer:
+            return []
+        layers.append(layer)
+        done.update(layer)
+    return layers

@@ -1,0 +1,308 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from ..core.db import get_db, new_id, utcnow
+from ..core.security import Principal, current_principal, require_human, require_role
+from ..models import AIMessage, AIModel, AIProvider, AISession, UsageRecord
+from ..services import audit, openapi, orchestrator, vault
+from ..services.ai_gateway import TASKS, Gateway
+from .common import iso
+
+router = APIRouter(prefix="/api/v1/ai", tags=["AI orchestration"])
+MAX_DOC_BYTES = 1_000_000
+
+
+def _session(db: Session, p: Principal, sid: str) -> AISession:
+    s = db.get(AISession, sid)
+    if not s or s.organization_id != p.org_id or (s.user_id != p.id and not p.at_least("admin")):
+        raise HTTPException(404, "Session not found")
+    return s
+
+
+class MessageIn(BaseModel):
+    content: str = Field(min_length=1, max_length=8000)
+
+
+class SessionIn(BaseModel):
+    message: str | None = Field(default=None, max_length=8000)
+
+
+@router.post("/sessions")
+def create_chat(body: SessionIn, p: Principal = Depends(require_role("user")), db: Session = Depends(get_db)):
+    s = AISession(user_id=p.id, organization_id=p.org_id, state={"stages": {}})
+    db.add(s)
+    db.commit()
+    if body.message:
+        orchestrator.handle_message(db, s, body.message)
+    return orchestrator.session_view(db, s)
+
+
+@router.get("/sessions")
+def list_sessions(p: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+    rows = db.execute(select(AISession, func.count(AIMessage.id)).outerjoin(AIMessage, AIMessage.session_id == AISession.id)
+                      .where(AISession.user_id == p.id).group_by(AISession.id).order_by(AISession.updated_at.desc()).limit(50)).all()
+    return [{"id": s.id, "title": s.title, "status": s.status, "stage": s.stage, "messages": n, "updated_at": iso(s.updated_at)} for s, n in rows]
+
+
+@router.get("/sessions/{sid}")
+def resume_session(sid: str, p: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+    return orchestrator.session_view(db, _session(db, p, sid))
+
+
+@router.delete("/sessions/{sid}")
+def delete_session(sid: str, p: Principal = Depends(require_role("user")), db: Session = Depends(get_db)):
+    s = _session(db, p, sid)
+    for m in db.scalars(select(AIMessage).where(AIMessage.session_id == s.id)).all():
+        db.delete(m)
+    db.delete(s)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/sessions/{sid}/messages")
+def send_message(sid: str, body: MessageIn, p: Principal = Depends(require_role("user")), db: Session = Depends(get_db)):
+    s = _session(db, p, sid)
+    if orchestrator.session_view(db, s)["status"] == "running":
+        raise HTTPException(409, "Wait for generation to finish")
+    orchestrator.handle_message(db, s, body.content)
+    return orchestrator.session_view(db, s)
+
+
+class DocumentIn(BaseModel):
+    name: str = Field(default="openapi.json", max_length=200)
+    content: str = Field(min_length=2)
+
+
+@router.post("/sessions/{sid}/documents")
+def upload_document(sid: str, body: DocumentIn, p: Principal = Depends(require_role("user")), db: Session = Depends(get_db)):
+    s = _session(db, p, sid)
+    if len(body.content.encode()) > MAX_DOC_BYTES:
+        raise HTTPException(413, "Documents are limited to 1 MB")
+    try:
+        cat = openapi.parse_openapi(body.content)
+    except openapi.OpenAPIError as e:
+        raise HTTPException(422, f"Could not import {body.name}: {e}")
+    docs = [d for d in (s.documents or []) if openapi.slugify(d["catalog"]["title"]) != openapi.slugify(cat["title"])]
+    docs.append({"id": new_id(), "name": body.name, "kind": "openapi", "catalog": cat})
+    s.documents = docs
+    db.add(AIMessage(session_id=s.id, role="system", content=f"Uploaded {body.name}: {cat['title']} with {len(cat['operations'])} operations.",
+                     meta={"document": cat["title"]}))
+    db.commit()
+    orchestrator.refresh_requirements(db, s)
+    return orchestrator.session_view(db, s)
+
+
+class GenerateIn(BaseModel):
+    from_stage: str | None = None
+
+
+@router.post("/sessions/{sid}/generate")
+def generate(sid: str, body: GenerateIn, p: Principal = Depends(require_role("user")), db: Session = Depends(get_db)):
+    s = _session(db, p, sid)
+    if not (s.requirements or {}).get("ready"):
+        raise HTTPException(409, "Answer the open questions before generating")
+    orchestrator.start(s.id, body.from_stage)
+    s.status = "running"
+    db.commit()
+    return orchestrator.session_view(db, s)
+
+
+@router.post("/sessions/{sid}/revise")
+def revise(sid: str, body: MessageIn, p: Principal = Depends(require_role("user")), db: Session = Depends(get_db)):
+    s = _session(db, p, sid)
+    orchestrator.handle_message(db, s, body.content)
+    if (s.requirements or {}).get("ready"):
+        orchestrator.start(s.id, None)
+    return orchestrator.session_view(db, s)
+
+
+# ------------------------------------------------------------------------------------ providers
+
+def provider_view(db: Session, pr: AIProvider) -> dict:
+    models = db.scalars(select(AIModel).where(AIModel.provider_id == pr.id).order_by(AIModel.priority)).all()
+    return {"id": pr.id, "name": pr.name, "provider_type": pr.provider_type, "base_url": pr.base_url, "status": pr.status,
+            "has_key": bool(pr.secret_ref), "last_error": pr.last_error,
+            "models": [{"id": m.id, "model_id": m.model_id, "label": m.label, "purposes": m.purposes, "capabilities": m.capabilities,
+                        "allow_confidential": m.allow_confidential, "cost_input_per_mtok": m.cost_input_per_mtok,
+                        "cost_output_per_mtok": m.cost_output_per_mtok, "priority": m.priority, "enabled": m.enabled} for m in models]}
+
+
+@router.get("/providers")
+def list_providers(p: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+    return [provider_view(db, pr) for pr in db.scalars(select(AIProvider).order_by(AIProvider.created_at)).all()]
+
+
+class ProviderIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    provider_type: str = Field(pattern="^(openai_compatible|anthropic|gemini)$")
+    base_url: str = Field(default="", max_length=500)
+    api_key: str = Field(default="", max_length=500)
+    model_id: str = Field(min_length=1, max_length=200)
+    purposes: list[str] = ["general"]
+
+
+DEFAULT_BASE = {"openai_compatible": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com",
+                "gemini": "https://generativelanguage.googleapis.com/v1beta"}
+
+
+@router.post("/providers")
+def register_provider(body: ProviderIn, p: Principal = Depends(require_human("owner")), db: Session = Depends(get_db)):
+    base = (body.base_url or DEFAULT_BASE[body.provider_type]).rstrip("/")
+    if not base.startswith(("https://", "http://")):
+        raise HTTPException(422, "Base URL must be http(s)")
+    pr = AIProvider(name=body.name, provider_type=body.provider_type, base_url=base,
+                    secret_ref=vault.store_secret(db, None, {"api_key": body.api_key}) if body.api_key else None)
+    db.add(pr)
+    db.flush()
+    db.add(AIModel(provider_id=pr.id, model_id=body.model_id, label=body.model_id, purposes=[x for x in body.purposes if x in TASKS or x == "general"] or ["general"],
+                   capabilities={"json_mode": True, "context_tokens": 128000}, priority=50))
+    audit.record(db, None, p, "ai.provider.create", body.name, type=body.provider_type)
+    db.commit()
+    return provider_view(db, pr)
+
+
+class ProviderPatch(BaseModel):
+    status: str | None = Field(default=None, pattern="^(active|disabled)$")
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=500)
+
+
+@router.patch("/providers/{pid}")
+def update_provider(pid: str, body: ProviderPatch, p: Principal = Depends(require_human("owner")), db: Session = Depends(get_db)):
+    pr = db.get(AIProvider, pid)
+    if not pr:
+        raise HTTPException(404, "Provider not found")
+    if body.status:
+        pr.status = body.status
+    if body.base_url is not None and pr.provider_type != "local":
+        pr.base_url = body.base_url.rstrip("/")
+    if body.api_key:
+        vault.delete_secret(db, pr.secret_ref)
+        pr.secret_ref = vault.store_secret(db, None, {"api_key": body.api_key})
+    audit.record(db, None, p, "ai.provider.update", pr.name, status=pr.status, key_rotated=bool(body.api_key))
+    db.commit()
+    return provider_view(db, pr)
+
+
+@router.delete("/providers/{pid}")
+def delete_provider(pid: str, p: Principal = Depends(require_human("owner")), db: Session = Depends(get_db)):
+    pr = db.get(AIProvider, pid)
+    if not pr:
+        raise HTTPException(404, "Provider not found")
+    if pr.provider_type == "local":
+        raise HTTPException(409, "The built-in model is the last-resort fallback; disable it instead")
+    for m in db.scalars(select(AIModel).where(AIModel.provider_id == pr.id)).all():
+        db.delete(m)
+    vault.delete_secret(db, pr.secret_ref)
+    db.delete(pr)
+    audit.record(db, None, p, "ai.provider.delete", pr.name)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/providers/{pid}/test")
+def test_provider(pid: str, p: Principal = Depends(require_role("admin")), db: Session = Depends(get_db)):
+    pr = db.get(AIProvider, pid)
+    if not pr:
+        raise HTTPException(404, "Provider not found")
+    return Gateway(db, p.org_id).test_provider(pr)
+
+
+class ModelIn(BaseModel):
+    model_id: str = Field(min_length=1, max_length=200)
+    label: str = Field(default="", max_length=120)
+    purposes: list[str] = ["general"]
+    allow_confidential: bool = True
+    cost_input_per_mtok: float = Field(default=0, ge=0)
+    cost_output_per_mtok: float = Field(default=0, ge=0)
+    priority: int = Field(default=50, ge=0, le=10000)
+    json_mode: bool = True
+    context_tokens: int = Field(default=128000, ge=1000)
+    enabled: bool = True
+
+
+def _apply_model(m: AIModel, body: ModelIn) -> None:
+    m.model_id, m.label = body.model_id, body.label or body.model_id
+    m.purposes = [x for x in body.purposes if x in TASKS or x == "general"] or ["general"]
+    m.allow_confidential, m.priority, m.enabled = body.allow_confidential, body.priority, body.enabled
+    m.cost_input_per_mtok, m.cost_output_per_mtok = body.cost_input_per_mtok, body.cost_output_per_mtok
+    m.capabilities = {"json_mode": body.json_mode, "context_tokens": body.context_tokens}
+
+
+@router.post("/providers/{pid}/models")
+def register_model(pid: str, body: ModelIn, p: Principal = Depends(require_human("owner")), db: Session = Depends(get_db)):
+    pr = db.get(AIProvider, pid)
+    if not pr or pr.provider_type == "local":
+        raise HTTPException(404, "Provider not found")
+    m = AIModel(provider_id=pid)
+    _apply_model(m, body)
+    db.add(m)
+    audit.record(db, None, p, "ai.model.create", body.model_id, provider=pr.name)
+    db.commit()
+    return provider_view(db, pr)
+
+
+@router.put("/models/{mid}")
+def update_model(mid: str, body: ModelIn, p: Principal = Depends(require_human("owner")), db: Session = Depends(get_db)):
+    m = db.get(AIModel, mid)
+    if not m:
+        raise HTTPException(404, "Model not found")
+    pr = db.get(AIProvider, m.provider_id)
+    if pr.provider_type == "local":
+        m.enabled, m.priority = body.enabled, body.priority
+    else:
+        _apply_model(m, body)
+    audit.record(db, None, p, "ai.model.update", m.model_id)
+    db.commit()
+    return provider_view(db, pr)
+
+
+@router.delete("/models/{mid}")
+def delete_model(mid: str, p: Principal = Depends(require_human("owner")), db: Session = Depends(get_db)):
+    m = db.get(AIModel, mid)
+    if not m:
+        raise HTTPException(404, "Model not found")
+    pr = db.get(AIProvider, m.provider_id)
+    if pr.provider_type == "local":
+        raise HTTPException(409, "The built-in model cannot be deleted")
+    db.delete(m)
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/routing")
+def routing(p: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+    gw = Gateway(db, p.org_id)
+    return {"tasks": [{"task": t, "structured": TASKS[t][0], "confidential": TASKS[t][1],
+                       "candidates": [f"{pr.name} · {m.label or m.model_id}" for m, pr in gw.select_models(t)]} for t in TASKS],
+            "month_spend": round(gw.month_spend(), 4), "budget": gw.budget()}
+
+
+@router.get("/usage")
+def usage(p: Principal = Depends(require_role("admin")), db: Session = Depends(get_db)):
+    month = utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    base = select(UsageRecord).where(UsageRecord.organization_id == p.org_id, UsageRecord.created_at >= month)
+    rows = db.scalars(base).all()
+    by: dict = {}
+    for r in rows:
+        key = (r.model_name, r.task)
+        b = by.setdefault(key, {"model": r.model_name, "task": r.task, "calls": 0, "failures": 0, "prompt_tokens": 0,
+                                "completion_tokens": 0, "cost": 0.0, "latency_ms": 0})
+        b["calls"] += 1
+        b["failures"] += 0 if r.success else 1
+        b["prompt_tokens"] += r.prompt_tokens
+        b["completion_tokens"] += r.completion_tokens
+        b["cost"] += r.estimated_cost
+        b["latency_ms"] += r.latency_ms
+    for b in by.values():
+        b["latency_ms"] = int(b["latency_ms"] / b["calls"])
+        b["cost"] = round(b["cost"], 5)
+    recent = db.scalars(base.order_by(UsageRecord.created_at.desc()).limit(25)).all()
+    gw = Gateway(db, p.org_id)
+    return {"month_spend": round(gw.month_spend(), 5), "budget": gw.budget(), "rows": sorted(by.values(), key=lambda b: -b["calls"]),
+            "recent": [{"model": r.model_name, "task": r.task, "success": r.success, "error": r.error[:160], "latency_ms": r.latency_ms,
+                        "tokens": r.prompt_tokens + r.completion_tokens, "cost": r.estimated_cost, "at": iso(r.created_at)} for r in recent]}

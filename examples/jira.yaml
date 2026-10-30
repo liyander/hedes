@@ -1,0 +1,48 @@
+schema_version: "1.0"
+integration:
+  id: jira
+  name: Jira Issues
+  version: "1.0.0"
+  transport: http
+  description: Create and read Jira Cloud issues (tickets).
+  base_url: https://your-domain.atlassian.net
+  authentication:
+    type: basic
+    credential_ref: jira
+  operations:
+    - id: create_issue
+      description: Create a Jira ticket (issue) in a project
+      method: POST
+      path: /rest/api/3/issue
+      input_schema:
+        type: object
+        required: [project_key, summary]
+        properties:
+          project_key: {type: string, description: "Project key, e.g. SEC"}
+          summary: {type: string}
+          issue_type: {type: string, default: Task}
+          labels: {type: array, items: {type: string}}
+      request:
+        json_body:
+          fields:
+            project: {key: "${inputs.project_key}"}
+            summary: "${inputs.summary}"
+            issuetype: {name: "${inputs.issue_type}"}
+            labels: "${inputs.labels}"
+      response:
+        status_codes: [201]
+        mapping: {issue_id: "$.id", issue_key: "$.key", issue_url: "$.self"}
+    - id: get_issue
+      description: Get a Jira issue by key
+      method: GET
+      path: /rest/api/3/issue/{issue_key}
+      input_schema:
+        type: object
+        required: [issue_key]
+        properties:
+          issue_key: {type: string}
+      request:
+        path_params: {issue_key: "${inputs.issue_key}"}
+      response:
+        status_codes: [200]
+        mapping: {key: "$.key", summary: "$.fields.summary", status: "$.fields.status.name"}
