@@ -10,8 +10,8 @@ export async function render({ el }) {
   el.innerHTML = `<div class="page stack">
     <div class="hero">
       <span class="pill"><span class="dot on"></span>${m.tools} live tools · ${m.executions} runs in 24 h</span>
-      <h1>What do you want to connect, ${esc(first)}?</h1>
-      <p>Describe it in plain language. The AI researches the API, generates and tests the configuration, and sends it to an administrator. No connector code.</p>
+      <h1>Good to see you, ${esc(first)}</h1>
+      <p>Describe an integration in plain language. The AI drafts and tests the configuration, then sends it to an administrator for approval.</p>
       <form class="ask" id="ask"><input type="text" id="ask-in" placeholder="e.g. When a GitHub issue is labeled security, create a Jira ticket and notify Slack" aria-label="Describe an integration">
         <button class="btn primary icon" aria-label="Start">${icon('send')}</button></form>
     </div>

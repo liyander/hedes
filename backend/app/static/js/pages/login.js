@@ -1,27 +1,17 @@
 import { $, api, icon, LOGO } from '../lib.js';
 import { state, go } from '../app.js';
 
-const ART = `<svg viewBox="0 0 400 400" aria-hidden="true">
-  <defs><pattern id="dots" width="8" height="8" patternUnits="userSpaceOnUse"><circle cx="1.500" cy="1.500" r="1" fill="#2a2a2a"/></pattern></defs>
-  <path d="M40 330c40-60 120-40 160-90s60-120 160-130" stroke="#fff" stroke-width="26" fill="none" stroke-linecap="round" opacity=".9"/>
-  <g stroke="#0f766e" stroke-width="3" stroke-dasharray="6 7" fill="none"><path d="M110 110 L200 200 L300 110"/><path d="M200 200 L200 300"/></g>
-  <circle cx="200" cy="200" r="78" fill="#111"/><circle cx="200" cy="200" r="78" fill="url(#dots)"/>
-  <circle cx="200" cy="200" r="64" fill="none" stroke="#0f766e" stroke-width="4"/>
-  <g fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round"><circle cx="176" cy="184" r="10"/><circle cx="224" cy="184" r="10"/><circle cx="200" cy="224" r="10"/><path d="M182 193l12 22M218 193l-12 22M186 184h28"/></g>
-  <g><circle cx="110" cy="110" r="34" fill="#111"/><circle cx="110" cy="110" r="42" fill="none" stroke="#0f766e" stroke-width="3" stroke-dasharray="3 6"/>
-     <path d="M98 104h24M98 112h24M98 120h14" stroke="#fff" stroke-width="4" stroke-linecap="round"/></g>
-  <g><circle cx="300" cy="110" r="34" fill="#111"/><circle cx="300" cy="110" r="42" fill="none" stroke="#0f766e" stroke-width="3" stroke-dasharray="3 6"/>
-     <path d="M286 110l9 9 18-18" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round"/></g>
-  <g><circle cx="200" cy="310" r="30" fill="#111"/><path d="M188 310h24M200 298v24" stroke="#fff" stroke-width="5" stroke-linecap="round"/></g>
-  <g fill="#0f766e"><path d="M60 200h18M69 191v18" stroke="#0f766e" stroke-width="5" stroke-linecap="round"/><path d="M330 250h18M339 241v18" stroke="#0f766e" stroke-width="5" stroke-linecap="round"/></g>
+const ART = `<svg viewBox="0 0 320 240" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5">
+  <rect x="24" y="24" width="96" height="40" rx="6"/><rect x="200" y="24" width="96" height="40" rx="6"/>
+  <rect x="112" y="100" width="96" height="40" rx="6"/><rect x="112" y="176" width="96" height="40" rx="6"/>
+  <path d="M72 64v16q0 20 40 20M248 64v16q0 20-40 20M160 140v36" stroke-dasharray="4 4" opacity=".6"/>
+  <path d="M40 44h40M40 54h24M216 44h40M216 54h24M128 120h40M128 196h56" stroke-linecap="round" opacity=".5"/>
 </svg>`;
 
 function card(form) {
   return `<div class="login-wrap"><div class="login-card">
     <div class="login-form">${form}</div>
     <div class="login-art">${ART}
-      <div class="float" style="left:22px;bottom:110px"><span class="badge ok">${icon('check', 14)}</span><div><b>Integration approved</b><small>TaskFlow · published v1.0.0</small></div></div>
-      <div class="float" style="right:22px;top:60px"><span class="badge accent">${icon('wrench', 14)}</span><div><b>Repair proposed</b><small>Schema drift · awaiting review</small></div></div>
     </div></div></div>`;
 }
 
