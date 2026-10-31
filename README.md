@@ -70,8 +70,11 @@ backoff/jitter and `Retry-After`, per-connector rate caps, interval **or cron** 
 Users and devices are upserted; events are append-only. Secrets can be stored in the vault or read from the server's
 environment with `env:NAME` (organisation credentials may only use variables listed in `CONNECTION_ENV_VARS`). Adding another source is writing a YAML file (or asking the assistant to draft one).
 
-Only the CISA feed is verified end to end against the live internet by the test suite; the others need your accounts, and
-are validated and exercised with the engine's request/response tests.
+The CISA feed and the NVD API (no account needed) are verified end to end against the live internet by the test suite; the
+others need your accounts, and are validated and exercised with the engine's request/response tests.
+
+Event mappings may use the PRD's Event/Alert names: `id` is stored as `event_id`, `type` as `category` (and as `action` when
+no action is mapped) and `description` as `message`. The events API returns both sets of names.
 
 **Alerts** can be pushed to Slack (incoming webhook) and/or email (SMTP) from *Settings → Alert delivery*; a source
 that fails N runs in a row (default 3) raises one. **WhatsApp** (Meta Cloud API) sends alerts to each admin's own verified number

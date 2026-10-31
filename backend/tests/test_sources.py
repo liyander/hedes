@@ -49,6 +49,26 @@ def test_normalize_maps_values_and_coerces_timestamps():
         assert ingest.parse_timestamp(value) == datetime(2024, 5, 1, 10, 0)
 
 
+def test_normalize_accepts_prd_event_field_names():
+    prd = {"fields": {"id": "$.id", "type": "$.kind", "severity": "$.sev", "timestamp": "$.at", "description": "$.text"},
+           "value_maps": {"type": {"LOGIN_FAIL": "authentication"}}, "defaults": {"description": "n/a"}}
+    rec, why = ingest.normalize({"id": 9, "kind": "LOGIN_FAIL", "sev": "high", "at": 1_700_000_000}, prd, "x")
+    assert not why
+    assert rec["event_id"] == "9" and rec["category"] == "authentication" and rec["action"] == "authentication"
+    assert rec["severity"] == "high" and rec["message"] == "n/a"
+
+
+def test_validation_accepts_prd_event_names_and_rejects_duplicates():
+    def with_fields(fields):
+        c = cfg()
+        c["integration"]["operations"][0]["ingest"] = {"fields": fields}
+        return validate_config(c)
+    ok = with_fields({"id": "$.id", "type": "$.kind", "timestamp": "$.at", "description": "$.text"})
+    assert ok["valid"], ok["errors"]
+    dup = with_fields({"id": "$.id", "event_id": "$.id", "timestamp": "$.at", "action": "$.a"})
+    assert not dup["valid"] and any("same field" in e["message"] for e in dup["errors"])
+
+
 @pytest.mark.parametrize("raw,fragment", [
     ({"id": 1, "who": "a", "what": "x"}, "timestamp"),
     ({"id": 1, "at": "not a date", "what": "x"}, "timestamp"),
@@ -95,6 +115,26 @@ def test_engine_retries_429_then_succeeds_and_reports_waits(no_sleep):
     res = engine.execute(cfg(retry={"max_attempts": 4, "backoff_seconds": 0.1}), "pull", {}, transport=httpx.MockTransport(handler), live=False, raw=True)
     assert res.status == "succeeded" and res.attempts == 3 and res.output["count"] == 1
     assert len(no_sleep) == 2 and all(w >= 2 for w in no_sleep) and res.diagnostics["retry_waits"] == [2.0, 2.0]
+
+
+@pytest.mark.parametrize("code", [500, 502, 503, 504])
+def test_engine_retries_server_errors_with_exponential_backoff(no_sleep, monkeypatch, code):
+    monkeypatch.setattr(engine, "_random", lambda: 1.0)
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        return httpx.Response(code) if len(calls) < 4 else httpx.Response(200, json={"items": [{"id": 1}]})
+
+    res = engine.execute(cfg(retry={"max_attempts": 4, "backoff_seconds": 1}), "pull", {}, transport=httpx.MockTransport(handler), live=False, raw=True)
+    assert res.status == "succeeded" and res.attempts == 4 and no_sleep == [1.0, 2.0, 4.0]   # 1 s, 2 s, 4 s
+
+
+def test_engine_marks_failed_after_last_server_error_retry():
+    res = engine.execute(cfg(retry={"max_attempts": 3}), "pull", {}, transport=httpx.MockTransport(lambda r: httpx.Response(500)), live=False)
+    assert res.status != "succeeded" and res.error_class == "upstream_error" and res.attempts == 3
+    res = engine.execute(cfg(retry={"max_attempts": 3}), "pull", {}, transport=httpx.MockTransport(lambda r: httpx.Response(501)), live=False)
+    assert res.attempts == 1                                                  # 501 Not Implemented is permanent
 
 
 def test_engine_gives_up_with_rate_limited_class():

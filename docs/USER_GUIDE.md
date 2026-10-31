@@ -484,7 +484,7 @@ Every execution (Test Lab, REST API, workflow step, MCP call) follows the same s
    CGNAT and cloud-metadata ranges are refused); the organisation's allowed domains apply. Only the bundled mock APIs are
    allow-listed as private destinations.
 8. Send with the timeout (operation → integration → 15 s). Redirects are not followed, and responses over 2 MB are refused.
-9. **Retries** only for idempotent operations (GET, PUT, DELETE, or `idempotent: true`): on 429/502/503/504, timeouts and network
+9. **Retries** only for idempotent operations (GET, PUT, DELETE, or `idempotent: true`): on 429 and 5xx (except 501/505), timeouts and network
    errors, with exponential backoff (default 0.5 s) honouring `Retry-After` (capped at 10 s). Create/update calls are never
    retried blindly, to avoid duplicates.
 10. Check the status code, parse the body, paginate, apply the output mapping and detect drift.

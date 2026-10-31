@@ -23,6 +23,7 @@ from ..models import (Connection, DeadLetter, Execution, IngestRun, IngestSource
                       NormalizedDevice, NormalizedEvent, NormalizedUser)
 from . import audit, cron, engine, jsonpath, monitoring, vault
 from .integrations import org_policy
+from .validation import resolve_event_aliases
 
 log = logging.getLogger("integra.ingest")
 
@@ -137,6 +138,8 @@ def normalize(raw: Any, spec: dict, source: str) -> tuple[dict | None, list[str]
     if not isinstance(raw, dict):
         return None, [f"record is a {type(raw).__name__}, expected an object"]
     entity = spec.get("entity") or "event"
+    if entity == "event":
+        spec = resolve_event_aliases(spec)
     names = ENTITY_FIELDS[entity]
     out: dict[str, Any] = {}
     for name in names:

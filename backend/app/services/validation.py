@@ -18,6 +18,26 @@ ENTITY_FIELD_NAMES = {
     "user": ("id", "name", "email", "status", "last_login"),
     "device": ("id", "hostname", "ip", "os", "owner", "last_seen"),
 }
+# The PRD's Event/Alert names (id, type, description) are accepted in an event mapping and stored under the platform's names.
+EVENT_ALIASES = {"id": "event_id", "type": "category", "description": "message"}
+
+
+def resolve_event_aliases(ing: dict) -> dict:
+    """Rewrite PRD-style event field names in ``fields``/``value_maps``/``defaults`` to the stored names.
+    A mapped ``type`` also fills ``action`` when that is not mapped, so a config written only in the PRD's terms is complete."""
+    if (ing.get("entity") or "event") != "event" or not any(a in (ing.get(k) or {}) for k in ("fields", "value_maps", "defaults") for a in EVENT_ALIASES):
+        return ing
+    out = dict(ing)
+    for key in ("fields", "value_maps", "defaults"):
+        if ing.get(key):
+            out[key] = {EVENT_ALIASES.get(k, k): v for k, v in ing[key].items() if not (k in EVENT_ALIASES and EVENT_ALIASES[k] in ing[key])}
+    fields = ing.get("fields") or {}
+    if "type" in fields and "action" not in fields:
+        out["fields"]["action"] = fields["type"]
+        maps = ing.get("value_maps") or {}
+        if "type" in maps and "action" not in maps:
+            out["value_maps"]["action"] = maps["type"]
+    return out
 
 SAFE_BY_METHOD = {"GET": "read", "POST": "write", "PUT": "write", "PATCH": "write", "DELETE": "destructive"}
 FORBIDDEN_HEADERS = {"authorization", "cookie", "host", "content-length", "transfer-encoding", "connection",
@@ -146,6 +166,11 @@ def validate_config(config: dict) -> dict:
                 errors.append({"path": where + "/input_schema", "message": "Ingestion operations run unattended: inputs cannot be required"})
             entity = ing.get("entity") or "event"
             allowed = ENTITY_FIELD_NAMES[entity]
+            if entity == "event":
+                for alias, name in EVENT_ALIASES.items():
+                    if alias in (ing.get("fields") or {}) and name in ing["fields"]:
+                        errors.append({"path": where + f"/ingest/fields/{alias}", "message": f"{alias!r} and {name!r} are the same field; map only one of them"})
+                ing = resolve_event_aliases(ing)
             fields = ing.get("fields") or {}
             for name, fspec in fields.items():
                 if name not in allowed:

@@ -87,7 +87,8 @@ scheduler (15 s tick) -> IngestSource (interval, high-water mark, health)
 ```
 
 * **Common format**: `event_id, timestamp (UTC), category, action, actor, target, outcome (success|failure|unknown),
-  severity (info..critical), message`, plus the original record. `value_maps` translate vendor vocabularies;
+  severity (info..critical), message`, plus the original record. Mappings may also say `id`, `type` and `description`
+  (aliases resolved by `validation.resolve_event_aliases`). `value_maps` translate vendor vocabularies;
   timestamps accept ISO-8601, epoch seconds or milliseconds.
 * **Incremental**: the newest ingested timestamp is stored per source; the next run asks the API only for newer data
   (minus a small overlap that de-duplication absorbs). *Re-read full history* clears it.

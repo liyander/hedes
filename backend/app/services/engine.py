@@ -27,7 +27,7 @@ from jsonschema import Draft202012Validator
 from . import egress, jsonpath, templates
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-RETRYABLE_STATUS = {429, 502, 503, 504}
+RETRYABLE_STATUS = {429, 500, 502, 503, 504, 507, 508, 509, 520, 521, 522, 523, 524}  # 5xx except 501/505 (never transient)
 IDEMPOTENT_METHODS = {"GET", "PUT", "DELETE"}
 DEFAULT_MAX_WAIT = 10.0
 _sleep = time.sleep      # swapped in tests so backoff does not slow the suite

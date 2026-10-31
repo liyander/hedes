@@ -6,6 +6,7 @@ import pytest
 from conftest import login
 
 KEV = "https://raw.githubusercontent.com/cisagov/kev-data/develop/known_exploited_vulnerabilities.json"
+NVD = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
 
 @pytest.fixture(scope="module")
@@ -75,3 +76,27 @@ def test_cisa_kev_end_to_end_against_the_real_feed(server, reachable):
     assert again["stored"] == 0 and again["duplicates"] == again["fetched"] > 1000
     assert admin.patch(f"/api/v1/sources/{src['id']}", json={"cron": "*/30 * * * *"}).json()["cron"] == "*/30 * * * *"
     assert admin.patch(f"/api/v1/sources/{src['id']}", json={"cron": "bad cron"}).status_code == 422
+
+
+def test_nvd_end_to_end_against_the_real_api(server):
+    """A second live source with a different paging style (offset) and incremental sync by publication date."""
+    try:
+        if httpx.get(NVD, params={"resultsPerPage": 1}, timeout=30).status_code != 200:
+            pytest.skip("NVD API not reachable or rate-limiting")
+    except httpx.HTTPError:
+        pytest.skip("no internet access")
+    builder, admin = login(server, "builder"), login(server, "admin")
+    made = builder.post("/api/v1/source-templates/nvd/create", json={"variables": {"severity": "CRITICAL"}}).json()
+    assert made["validation"]["valid"] and made["tests"]["result"] == "passed"
+    iid = made["integration"]["id"]
+    assert builder.post(f"/api/v1/integrations/{iid}/submit", json={}).status_code == 200
+    approval = next(a for a in admin.get("/api/v1/admin/approvals").json() if a["integration_id"] == iid)
+    assert admin.post(f"/api/v1/admin/approvals/{approval['id']}/approve", json={}).status_code == 200
+
+    src = next(s for s in admin.get("/api/v1/sources").json()["sources"] if s["slug"] == "nvd")
+    run = admin.post(f"/api/v1/sources/{src['id']}/run").json()["run"]
+    assert run["status"] in ("succeeded", "partial") and run["stored"] > 0, run
+    row = admin.get("/api/v1/events", params={"source": "nvd", "limit": 1}).json()["items"][0]
+    assert row["type"] == "vulnerability" and row["severity"] == "critical" and row["event_id"].startswith("CVE-") and row["fetched_at"]
+    health = admin.get(f"/api/v1/sources/{src['id']}").json()
+    assert health["totals"]["stored"] == run["stored"] and health["last_run_at"]
