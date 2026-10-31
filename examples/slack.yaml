@@ -27,6 +27,16 @@ integration:
         status_codes: [200]
         mapping: {ok: "$.ok", channel: "$.channel", ts: "$.ts"}
         optional_fields: [channel, ts]
+        # Slack answers HTTP 200 even when a call fails: {"ok": false, "error": "missing_scope", "needed": ..., "provided": ...}
+        success: &slack_ok
+          path: "$.ok"
+          equals: true
+          error_path: "$.error"
+          detail_paths: ["$.needed", "$.provided"]
+          error_classes: {invalid_auth: auth_invalid, not_authed: auth_invalid, account_inactive: auth_invalid, token_revoked: auth_invalid,
+                          token_expired: auth_invalid, missing_scope: forbidden, not_allowed_token_type: forbidden, no_permission: forbidden,
+                          ekm_access_denied: forbidden, channel_not_found: not_found, ratelimited: rate_limited, internal_error: upstream_error,
+                          fatal_error: upstream_error, service_unavailable: upstream_error}
     - id: list_channels
       description: List public channels
       method: GET
@@ -39,5 +49,6 @@ integration:
         query: {limit: "${inputs.limit}"}
       response:
         status_codes: [200]
+        success: *slack_ok
         items_path: "$.channels"
         mapping: {id: "$.id", name: "$.name"}

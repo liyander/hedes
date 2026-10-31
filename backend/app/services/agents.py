@@ -14,7 +14,7 @@ from typing import Any
 
 from . import catalog as catalog_mod
 from . import openapi
-from .ai_gateway import Gateway, wrap_document
+from .ai_gateway import Gateway, ProviderError, wrap_document
 from .security_review import summarize as summarize_report
 from .validation import _schema, normalize_config, validate_config
 
@@ -96,6 +96,17 @@ def _choose_ops(svc: dict, documents: list[dict], text: str, is_trigger_only: bo
         chosen = [op for op in ops if op_kind(op) == "read"][:2]
     if not chosen:
         chosen = [op for op in ops if op_kind(op) in ("read", "create", "notify")][:6]
+    # Large APIs: keep the operations about the things the user named ("create cards" -> POST /cards, not every create).
+    if len(chosen) > 6:
+        noise = {v for vs in VERBS.values() for v in vs} | {"automatically", "connect", "integrate", "whenever", "every", "with", "from",
+                                                              "into", "that", "this", "their", "when", "service", "integration", "please"}
+        nouns = {w.rstrip("s") for w in re.findall(r"[a-z]{4,}", t)} - noise - set(re.findall(r"[a-z]+", svc.get("slug", "")))
+
+        def hits(op: dict) -> int:
+            return len({w.rstrip("s") for w in re.findall(r"[a-z]{3,}", f"{op['id']} {op['path']}".lower())} & nouns)
+        focused = sorted((op for op in chosen if hits(op)), key=lambda op: (-hits(op), len(op["path"])))
+        if focused:
+            chosen = focused[:8]
     if "delete" not in kinds:
         chosen = [op for op in chosen if op_kind(op) != "delete"]
     return [{"service": svc["slug"], "action": (op.get("summary") or op.get("description") or op["id"])[:120],
@@ -123,8 +134,9 @@ def local_requirements(messages: list[dict], documents: list[dict], prior: dict)
             services.append({"name": cfg["integration"]["name"], "slug": slug, "source": "catalog",
                              "base_url": cfg["integration"]["base_url"]})
     names = {s["slug"] for s in services} | {s["name"].lower() for s in services}
+    names |= {a.lower() for d in documents for a in d.get("aliases") or []} | {openapi.slugify(a) for d in documents for a in d.get("aliases") or []}
     unknown = []
-    for m in re.finditer(r"\b(?:connect|integrate|with|to|use|from|into)\s+(?:my |our |the |a |an |another )?([A-Z][A-Za-z0-9-]{2,})", user_text):
+    for m in re.finditer(r"\b(?i:connect|integrate|with|to|use|from|into)\s+(?i:my |our |the |a |an |another )?([A-Z][A-Za-z0-9-]{2,})", user_text):
         cand = m.group(1)
         if cand not in STOP and cand.lower() not in names and openapi.slugify(cand) not in names and cand not in unknown:
             unknown.append(cand)
@@ -183,7 +195,7 @@ def local_requirements(messages: list[dict], documents: list[dict], prior: dict)
     if triggers:
         summary += f"; trigger: {triggers[0]['event']}"
     return {"summary": summary, "services": services, "operations": operations, "triggers": triggers,
-            "details": details, "missing": missing, "ready": not missing and bool(services), "reply": ""}
+            "details": details, "missing": missing, "ready": not missing and bool(services), "reply": "", "unknown_services": unknown}
 
 
 def requirements_from_tools(text: str, tools: dict[str, dict]) -> dict:
@@ -206,7 +218,8 @@ def requirements_from_tools(text: str, tools: dict[str, dict]) -> dict:
 def compose_reply(req: dict) -> str:
     if req["missing"]:
         lines = ["Thanks - I need a little more before I can build this:"]
-        lines += [f"- {q}" for q in req["missing"]]
+        for q in req["missing"]:
+            lines.append(f"- {q} **How to find it:** {catalog_mod.how_to_find(q)}")
         if req["services"]:
             lines.insert(1, "So far I understand: " + req["summary"] + ".")
         return "\n".join(lines)
@@ -264,6 +277,8 @@ def analyze_request(gw: Gateway, messages: list[dict], documents: list[dict], pr
     if any(s["slug"] == "jira" for s in req["services"]) and req["details"].get("jira_base_url"):
         req["missing"] = [q for q in req["missing"] if "Jira Cloud site" not in q]
     req["ready"] = bool(req["services"]) and not req["missing"]
+    req["unknown_services"] = base.get("unknown_services") or []
+    req["missing_help"] = [{"question": q, "how": catalog_mod.how_to_find(q)} for q in req["missing"]]
     if res.local or not req.get("reply"):
         req["reply"] = compose_reply(req)
     return req, res.model
@@ -383,13 +398,16 @@ def _doc_from_mapping(resp: dict) -> Any:
     for name, path in (resp.get("mapping") or {}).items():
         put(item, path, 42 if name.endswith(("id", "number")) else True if name in ("ok", "delivered") else f"sample {name}")
     ip = resp.get("items_path")
-    if not ip:
-        return item
     if ip == "$":
         return [item]
-    wrapper: dict = {}
-    put(wrapper, ip, [item])
-    return wrapper
+    doc = item
+    if ip:
+        doc = {}
+        put(doc, ip, [item])
+    rule = resp.get("success")
+    if rule:
+        put(doc, rule["path"], rule["equals"])  # a happy-path response must pass the success check
+    return doc
 
 
 def generate_tests(config: dict, documents: list[dict]) -> list[dict]:
@@ -431,7 +449,24 @@ def generate_tests(config: dict, documents: list[dict]) -> list[dict]:
         if auth != "none":
             cases.append({"operation": op["id"], "name": f"{op['id']}: classifies expired credentials", "inputs": inputs,
                           "mock_status": 401, "mock_response": {"message": "Bad credentials"}, "expect": "auth_invalid"})
+        rule = op["response"].get("success")
+        if rule and "." in rule["path"]:
+            failed: dict = {}
+            _set_path(failed, rule["path"], False if rule["equals"] is True else None)
+            if rule.get("error_path"):
+                _set_path(failed, rule["error_path"], "some_error")
+            cases.append({"operation": op["id"], "name": f"{op['id']}: reports an API-level failure sent with HTTP 200", "inputs": inputs,
+                          "mock_status": (op["response"].get("status_codes") or [200])[0], "mock_response": failed,
+                          "expect": (rule.get("error_classes") or {}).get("some_error", "request_rejected")})
     return cases
+
+
+def _set_path(doc: dict, path: str, value) -> None:
+    keys = [a or b for a, b in re.findall(r"\.([A-Za-z0-9_\-]+)|\['([^']+)'\]", path)]
+    for k in keys[:-1]:
+        doc = doc.setdefault(k, {})
+    if keys:
+        doc[keys[-1]] = value
 
 
 # --------------------------------------------------------------------------- repair
@@ -604,3 +639,79 @@ def explain_error(gw: Gateway, tool_name: str, error_class: str, error: str, gui
     res = gw.text("error_explanation", system, [{"role": "user", "content": msg}], local=lambda: f"{guide[0]} {guide[1]}")
     return res.text, res.model
 
+
+
+# --------------------------------------------------------------------------- setup guidance (researched from vendor docs)
+
+SETUP_SCHEMA = {
+    "type": "object", "required": ["credential", "permissions", "steps", "common_errors", "sources"],
+    "properties": {
+        "credential": {"type": "string"},
+        "permissions": {"type": "array", "items": {"type": "string"}},
+        "steps": {"type": "array", "items": {"type": "string"}},
+        "prerequisites": {"type": "array", "items": {"type": "string"}},
+        "common_errors": {"type": "array", "items": {"type": "object", "required": ["code", "meaning", "fix"], "properties": {
+            "code": {"type": "string"}, "meaning": {"type": "string"}, "fix": {"type": "string"}}}},
+        "sources": {"type": "array", "items": {"type": "string"}},
+    },
+}
+MAX_DOC_PAGES = 3
+
+
+def setup_guide(gw: Gateway, slug: str, config: dict, documents: list[dict]) -> tuple[dict, str]:
+    """What a person must do in the vendor's product before this integration works: credential type, scopes or
+    permissions, setup steps, prerequisites and common errors - researched from the vendor's own reference pages."""
+    from . import docs_search
+    integ = config["integration"]
+    auth = integ.get("authentication") or {}
+    ops = integ.get("operations") or []
+    guide = catalog_mod.SERVICE_GUIDES.get(slug) or {}
+    doc_ops = {o["id"]: o for d in documents for o in d["catalog"]["operations"]}
+    scopes = sorted({s for o in ops for s in (doc_ops.get(o["id"]) or {}).get("scopes") or []} | set(auth.get("scopes") or []))
+    urls = [u for u in ([(guide.get("operations") or {}).get(o["id"]) or (doc_ops.get(o["id"]) or {}).get("docs_url") for o in ops]
+                        + [d["catalog"].get("docs_url") for d in documents] + [guide.get("docs")]) if u]
+    urls = list(dict.fromkeys(urls))[:MAX_DOC_PAGES]
+    pages, read, failed = [], [], []
+    for url in urls:
+        try:
+            excerpt = docs_search.setup_excerpt(docs_search.page_text(url))
+        except docs_search.DocsError as e:
+            failed.append(f"{url}: {e}")
+            continue
+        if excerpt:
+            pages.append(wrap_document(url, excerpt, limit=12000))
+            read.append(url)
+
+    base = {
+        "credential": catalog_mod.credential_help(slug, auth.get("type")),
+        "permissions": scopes,
+        "steps": list(guide.get("setup") or []) or ([f"Create the credential: {catalog_mod.credential_help(slug, auth.get('type'))}"]
+                                                     if auth.get("type", "none") != "none" else []),
+        "prerequisites": [],
+        "common_errors": [{"code": c, "meaning": m, "fix": f} for c, m, f in guide.get("errors") or []],
+        "sources": read,
+    }
+    if scopes and not guide.get("setup"):
+        base["steps"].append("Grant these scopes/permissions to the credential: " + ", ".join(scopes))
+    system = ("You are the API Setup Research agent. From the vendor documentation excerpts provided, write the setup checklist a person "
+              "must complete in the vendor's product before this integration works: the exact credential/token type, every required "
+              "scope or permission for the listed operations, setup steps in order, prerequisites (for example adding a bot to a channel "
+              "or granting repository access), and the common errors with their meaning and fix. Use only facts from the excerpts and "
+              "the operation list; do not invent scopes. 'sources' must be URLs from the provided documents that you used.")
+    op_list = "\n".join(f"- {o['method']} {o['path']} ({o['id']}): {o.get('description', '')}" for o in ops)
+    prompt = (f"Service: {integ.get('name')} ({integ.get('base_url')})\nAuthentication: {auth.get('type')}\n"
+              f"Scopes declared by the API specification: {', '.join(scopes) or 'none'}\nOperations:\n{op_list}\n\n" + "\n\n".join(pages))
+    try:
+        res = gw.structured("api_discovery", system, prompt, SETUP_SCHEMA, local=lambda: base)
+        data, model = res.data, res.model
+    except ProviderError:
+        data, model = base, ""
+    # Facts from the specification and the curated guide always stay; sources are limited to pages that were actually read.
+    data["permissions"] = list(dict.fromkeys(scopes + [p for p in data.get("permissions") or [] if p]))
+    data["steps"] = list(dict.fromkeys((data.get("steps") or []) + [s for s in base["steps"] if s not in (data.get("steps") or [])]))
+    codes = {e["code"] for e in data.get("common_errors") or []}
+    data["common_errors"] = (data.get("common_errors") or []) + [e for e in base["common_errors"] if e["code"] not in codes]
+    data["sources"] = [u for u in dict.fromkeys((data.get("sources") or []) + read) if u in read]
+    data["unread"] = failed
+    data.setdefault("prerequisites", [])
+    return data, model

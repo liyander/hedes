@@ -124,12 +124,17 @@ def parse_openapi(text: str) -> dict:
                 "response_schema": ok_media.get("schema"),
                 "response_example": ok_media.get("example"),
                 "deprecated": bool(spec.get("deprecated")),
+                # What the vendor documents for setup: the OAuth scopes this operation requires and its reference page.
+                "scopes": sorted({s for req in (spec.get("security") if spec.get("security") is not None else doc.get("security") or [])
+                                  if isinstance(req, dict) for v in req.values() if isinstance(v, list) for s in v if isinstance(s, str)}),
+                "docs_url": ((spec.get("externalDocs") or {}).get("url") or "") if isinstance(spec.get("externalDocs"), dict) else "",
             })
     if not ops:
         raise OpenAPIError("No HTTP operations were found under paths")
     return {"title": info.get("title") or "Imported API", "version": info.get("version", ""),
             "description": (info.get("description") or "")[:1000], "base_url": base_url,
-            "auth": auth, "operations": ops}
+            "auth": auth, "operations": ops,
+            "docs_url": ((doc.get("externalDocs") or {}).get("url") or "") if isinstance(doc.get("externalDocs"), dict) else ""}
 
 
 def catalog_summary(catalog: dict) -> str:

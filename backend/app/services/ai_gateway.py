@@ -301,6 +301,30 @@ class Gateway:
     def __init__(self, db: Session, org_id: str | None):
         self.db = db
         self.org_id = org_id
+        self.fallbacks: list[dict] = []  # real models that failed before the built-in rules answered: shown to the user
+
+    def _fell_back(self, attempts: list[dict]) -> None:
+        """A configured AI provider failed and built-in rules answered instead. Never silent: remembered for the caller and
+        raised as an alert (once an hour per provider)."""
+        if not attempts:
+            return
+        self.fallbacks.extend(attempts)
+        if self.org_id:
+            from . import audit, monitoring
+            for a in {a["model"]: a for a in attempts}.values():
+                if not monitoring._recent_alert(self.db, self.org_id, "ai_provider", None, minutes=60):
+                    audit.alert(self.db, self.org_id, "ai_provider", f"AI provider {a['model']} failed and built-in rules were used instead: "
+                                f"{a['error'][:300]}", "high", None, "#/providers")
+
+    def fallback_note(self) -> str:
+        if not self.fallbacks:
+            return ""
+        first = self.fallbacks[0]
+        reason = first["error"].split("\n")[0][:200]
+        if "429" in first["error"] and "quota" in first["error"].lower():
+            reason = "HTTP 429 - the provider's quota is exhausted (check its plan, billing or rate limits)"
+        return (f"**Note:** your AI provider ({first['model']}) did not answer - {reason}. These answers come from built-in rules, "
+                "which are less thorough. Fix the provider under AI Providers and ask again for a full analysis.")
 
     # -- selection
     def month_spend(self) -> float:
@@ -377,6 +401,7 @@ class Gateway:
         for m, p in self.select_models(task, estimate_tokens(system + prompt), allow_local):
             label = f"{p.name} · {m.label or m.model_id}"
             if p.provider_type == "local":
+                self._fell_back(result.attempts)
                 data = local()
                 self._local_record(task, m, p)
                 result.data, result.model, result.provider, result.local = data, label, p.name, True
@@ -409,6 +434,7 @@ class Gateway:
         for m, p in self.select_models(task, estimate_tokens(system + json.dumps(messages))):
             label = f"{p.name} · {m.label or m.model_id}"
             if p.provider_type == "local":
+                self._fell_back(result.attempts)
                 result.text, result.model, result.provider, result.local = local(), label, p.name, True
                 self._local_record(task, m, p)
                 return result

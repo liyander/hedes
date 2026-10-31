@@ -35,7 +35,11 @@ def test_full_lifecycle(server, builder, admin, owner):
     assert any(o["operation_id"] == "create_task" for o in s["requirements"]["operations"])
 
     # 3. Generate: discover -> config -> validate -> security -> mock tests -> submit.
-    builder.post(f"/api/v1/ai/sessions/{s['id']}/generate", json={})
+    #    Nothing is written to the database until the user confirms the creation plan.
+    assert builder.post(f"/api/v1/ai/sessions/{s['id']}/generate", json={}).status_code == 409
+    plan = builder.get(f"/api/v1/ai/sessions/{s['id']}/plan").json()
+    assert [i["slug"] for i in plan["items"]] == ["taskflow"] and "integrations" in plan["items"][0]["tables"]
+    builder.post(f"/api/v1/ai/sessions/{s['id']}/generate", json={"confirm": plan["fingerprint"]})
     s = wait(lambda: (x := builder.get(f"/api/v1/ai/sessions/{s['id']}").json())["status"] in ("ready", "failed") and x)
     assert s["status"] == "ready", s["stages"]
     item = s["integrations"][0]

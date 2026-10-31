@@ -8,10 +8,11 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+from ..core.config import get_settings as app_settings
 from ..core.db import get_db
 from ..core.security import Principal, require_human
 from ..models import Organization
-from ..services import audit, egress, notify, vault
+from ..services import audit, egress, email_templates, notify, vault
 
 router = APIRouter(prefix="/api/v1/settings/notifications", tags=["notifications"])
 
@@ -99,10 +100,75 @@ def save_settings(body: NotificationsIn, p: Principal = Depends(require_human("a
     return notify.public_view(db, org)
 
 
+class TestIn(BaseModel):
+    template: str = Field(default="test", max_length=40)
+
+
 @router.post("/test")
-async def send_test(p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+async def send_test(body: TestIn | None = None, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+    """Send a sample alert through the configured channels, rendered with the chosen email template."""
     org = _org(db, p)
-    results = await run_in_threadpool(notify.send, db, org, "[H.E.D.E.S] Test notification", "If you can read this, alert delivery works.")
+    key = (body or TestIn()).template
+    if key not in email_templates.TEMPLATES:
+        raise HTTPException(422, f"Unknown template {key!r}")
+    mail = email_templates.render_sample(key, org.name, app_settings().public_base_url, notify.config_of(org).get("templates"))
+    results = await run_in_threadpool(lambda: notify.send(db, org, mail["subject"], mail["text"], html=mail["html"],
+                                                          slack_text=email_templates.SAMPLES[key][2]))
     if not results:
         raise HTTPException(409, "No channel is configured yet. Add a Slack webhook or SMTP details and save first.")
     return {"results": results, "ok": all(v == "sent" for v in results.values())}
+
+
+def _templates_view(org: Organization) -> list[dict]:
+    overrides = notify.config_of(org).get("templates") or {}
+    base = app_settings().public_base_url
+    return [{"key": k, "name": t["name"], "kinds": t["kinds"], "default": {f: t[f] for f in email_templates.EDITABLE},
+             "override": overrides.get(k) or {}, "preview": email_templates.render_sample(k, org.name, base, overrides)}
+            for k, t in email_templates.TEMPLATES.items()]
+
+
+@router.get("/templates")
+def list_templates(p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+    return {"templates": _templates_view(_org(db, p)), "placeholders": list(email_templates.PLACEHOLDERS)}
+
+
+class TemplatesIn(BaseModel):
+    # {template_key: {"subject": "...", "intro": "..."}}; an empty value restores the built-in text
+    overrides: dict[str, dict[str, str]] = Field(default_factory=dict)
+
+
+@router.put("/templates")
+def save_templates(body: TemplatesIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+    org = _org(db, p)
+    cfg = notify.config_of(org)
+    stored: dict[str, dict[str, str]] = {}
+    try:
+        for key, fields in body.overrides.items():
+            for field, value in fields.items():
+                value = email_templates.validate_override(key, field, value or "")
+                if value and value != email_templates.TEMPLATES[key][field]:
+                    stored.setdefault(key, {})[field] = value
+    except email_templates.TemplateError as e:
+        raise HTTPException(422, str(e))
+    cfg["templates"] = stored
+    org.policy = {**(org.policy or {}), "notifications": cfg}
+    audit.record(db, p.org_id, p, "settings.email_templates", org.name, customised=sorted(stored))
+    db.commit()
+    return {"templates": _templates_view(org), "placeholders": list(email_templates.PLACEHOLDERS)}
+
+
+class PreviewIn(BaseModel):
+    template: str = Field(max_length=40)
+    subject: str = Field(default="", max_length=400)
+    intro: str = Field(default="", max_length=2000)
+
+
+@router.post("/templates/preview")
+def preview_template(body: PreviewIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+    """Render a template with unsaved edits (nothing is stored or sent)."""
+    org = _org(db, p)
+    try:
+        edits = {f: email_templates.validate_override(body.template, f, getattr(body, f)) for f in email_templates.EDITABLE}
+    except email_templates.TemplateError as e:
+        raise HTTPException(422, str(e))
+    return email_templates.render_sample(body.template, org.name, app_settings().public_base_url, {body.template: edits})

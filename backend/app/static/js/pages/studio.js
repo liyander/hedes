@@ -1,11 +1,12 @@
-import { $, api, esc, icon, badge, md, json, ago, toast, readFile, riskBadge } from '../lib.js';
+import { $, api, esc, icon, badge, md, json, ago, toast, readFile, riskBadge, modal } from '../lib.js';
 import { connectModal } from './credentials.js';
 import { state } from '../app.js';
 import { modeBar, renderAssistantPage } from '../assistant.js';
 
 const STAGE_LABEL = {
   COLLECT_REQUIREMENTS: 'Collect requirements', DISCOVER_API: 'Discover API', DESIGN_INTEGRATION: 'Design integration',
-  GENERATE_CONFIGURATION: 'Generate configuration', VALIDATE_CONFIGURATION: 'Validate configuration', SECURITY_EVALUATION: 'Security evaluation',
+  GENERATE_CONFIGURATION: 'Generate configuration', VALIDATE_CONFIGURATION: 'Validate configuration', RESEARCH_SETUP: 'Research setup requirements',
+  SECURITY_EVALUATION: 'Security evaluation',
   RUN_SAFE_TESTS: 'Run safe tests', AWAIT_ADMIN_APPROVAL: 'Admin approval', PUBLISHED: 'Published',
 };
 const SUGGESTIONS = [
@@ -89,7 +90,8 @@ export async function render({ el, params }) {
             <dt>Operations</dt><dd>${(r.operations || []).map((o) => `<code>${esc(o.service)}.${esc(o.operation_id || o.action)}</code>`).join(' ') || '—'}</dd>
             ${(r.triggers || []).length ? `<dt>Trigger</dt><dd>${esc(r.triggers[0].event)}${r.triggers[0].condition ? ` · <code>${esc(r.triggers[0].condition)}</code>` : ''}</dd>` : ''}
             ${Object.keys(r.details || {}).length ? `<dt>Details</dt><dd>${Object.entries(r.details).map(([k, v]) => `${esc(k)}: <code>${esc(v)}</code>`).join(' ')}</dd>` : ''}</div>` : ''}
-          ${(r.missing || []).length ? `<div class="callout warn small" style="margin-top:12px"><b>Open questions</b><ul style="margin:4px 0 0;padding-left:18px">${r.missing.map((q) => `<li>${esc(q)}</li>`).join('')}</ul></div>` : ''}
+          ${(r.missing || []).length ? `<div class="callout warn small" style="margin-top:12px"><b>Open questions</b><ul style="margin:4px 0 0;padding-left:18px">${(r.missing_help || r.missing.map((q) => ({ question: q }))).map((q) =>
+            `<li style="margin-bottom:6px">${esc(q.question)}${q.how ? `<div class="muted">${icon('search', 12)} <b>How to find it:</b> ${esc(q.how)}</div>` : ''}</li>`).join('')}</ul></div>` : ''}
           ${(session.documents || []).length ? `<div class="small muted" style="margin-top:10px">${icon('doc', 13)} ${session.documents.map((d) => `${esc(d.title)} (${d.operations} ops)`).join(', ')}</div>` : ''}
           <div class="row" style="margin-top:14px">
             <button class="btn primary" id="gen" ${!r.ready || running ? 'disabled' : ''}>${running ? '<span class="spinner"></span> Generating…' : `${icon('spark', 16)} ${generated ? 'Regenerate as new version' : 'Generate integration'}`}</button>
@@ -100,6 +102,8 @@ export async function render({ el, params }) {
         return `<li class="${esc(s.status || '')}"><span class="sdot">${s.status === 'done' ? '✓' : s.status === 'failed' ? '!' : ''}</span><div><b>${STAGE_LABEL[k]}</b>${s.model ? ` <span class="muted small mono">${esc(s.model)}</span>` : ''}<small>${esc(s.detail || (s.status ? s.status : 'pending'))}</small></div></li>`;
       }).join('')}</ul></div>` : ''}
       ${session.integrations.map(integrationCard).join('')}
+      ${(session.sources || []).length ? `<div class="card card-pad"><h2 style="margin-bottom:8px">Sources referred</h2><ul class="small" style="margin:0;padding-left:18px">
+        ${session.sources.map((x) => `<li>${esc(x.label)}${x.url ? ` — <a class="link" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a>` : ''}</li>`).join('')}</ul></div>` : ''}
       ${session.workflow ? `<div class="card card-pad"><div class="row between"><div><h2>Workflow draft</h2><div class="muted small">${esc(session.workflow.name)}</div></div><a class="btn" href="#/workflows/${session.workflow.id}">${icon('flow', 15)} Open editor</a></div></div>` : ''}
     </div>`;
   }
@@ -115,8 +119,9 @@ export async function render({ el, params }) {
         <div class="tabs" style="margin-bottom:12px">${['overview', 'config', 'security', 'tests'].map((k) => `<button class="${k === t ? 'on' : ''}" data-tab="${k}" data-iid="${i.integration_id}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
         ${t === 'overview' ? `${ops.map((o) => `<div class="op-row">${method(o.method)}<div class="grow"><div class="path">${esc(o.path)}</div><div class="small muted">${esc(o.id)} — ${esc(o.description || '')}</div></div></div>`).join('')}
           <div class="row small" style="margin-top:12px;gap:14px"><span>Risk ${riskBadge(sec.level, sec.score)}</span><span>Tests ${i.tests ? badge(i.tests.failed ? 'failed' : 'passed', `${i.tests.passed}/${i.tests.total}`) : '—'}</span><span>Auth <code>${esc(i.auth_type)}</code></span></div>
-          ${needsCred ? `<div class="callout info small" style="margin-top:12px"><div class="row between"><span>${icon('key', 14)} Needs a <b>${esc(i.auth_type)}</b> credential named <code>${esc(i.credential_ref)}</code>. Stored encrypted; never shown to the AI.</span>
+          ${needsCred ? `<div class="callout info small" style="margin-top:12px"><div class="row between"><span>${icon('key', 14)} Needs a <b>${esc(i.auth_type)}</b> credential named <code>${esc(i.credential_ref)}</code>. Stored encrypted; never shown to the AI.${i.credential_help ? `<br><b>Where to get it:</b> ${esc(i.credential_help)}` : ''}</span>
             <button class="btn sm" data-connect="${esc(i.credential_ref)}" data-auth="${esc(i.auth_type)}" data-header="${esc(i.config.integration.authentication.header_name || '')}">Connect</button></div></div>` : ''}
+          ${i.setup ? setupHtml(i.setup) : ''}
           <div class="row" style="margin-top:12px">${i.approval_id ? `<a class="btn sm" href="#/approvals/${i.approval_id}">${icon('check', 14)} View review</a>` : ''}<a class="btn sm" href="#/integrations/${i.integration_id}">Open integration</a>${i.version_status === 'published' ? `<a class="btn sm primary" href="#/testlab/${i.integration_id}">${icon('play', 14)} Run it</a>` : ''}</div>`
         : t === 'config' ? json(i.config)
         : t === 'security' ? `${sec.ai_summary ? `<p class="small" style="margin-top:0">${esc(sec.ai_summary)}</p>` : ''}${(sec.findings || []).map((f) => `<div class="finding">${badge(f.severity)}<div><b>${esc(f.title)}</b>${f.blocking ? ' <span class="badge critical">blocking</span>' : ''}<div class="small muted">${esc(f.detail)}</div></div></div>`).join('') || '<p class="muted">No findings.</p>'}`
@@ -185,7 +190,12 @@ export async function render({ el, params }) {
     }
     t.disabled = true;
     try {
-      session = await api(`/ai/sessions/${session.id}/generate`, { method: 'POST', body: { from_stage: t.dataset.retry || null } });
+      // Nothing is written to the database until the user confirms exactly what will be created.
+      const plan = await api(`/ai/sessions/${session.id}/plan`);
+      const ok = await modal({ title: 'Create these records?', wide: true, body: planHtml(plan),
+        actions: [{ label: 'Cancel', value: false }, { label: 'Confirm and create', cls: 'primary', value: true }] });
+      if (!ok) { t.disabled = false; return; }
+      session = await api(`/ai/sessions/${session.id}/generate`, { method: 'POST', body: { from_stage: t.dataset.retry || null, confirm: plan.fingerprint } });
       paint();
       schedule();
     } catch (err) { toast(err.message, 'bad'); t.disabled = false; }
@@ -195,3 +205,26 @@ export async function render({ el, params }) {
   return () => clearTimeout(pollTimer);
 }
 
+
+// The confirmation shown before generating: every database record the build will create.
+function planHtml(plan) {
+  return `<p style="margin-top:0">Generating writes these records to the database. Nothing runs yet.</p>
+    ${plan.items.map((i) => `<div class="card card-pad" style="margin-bottom:10px"><div class="row between"><b>${esc(i.service)}</b>${badge(i.record === 'new integration' ? 'info' : 'medium', i.record)}</div>
+      <div class="small muted" style="margin:4px 0">Tables: ${i.tables.map((t) => `<code>${esc(t)}</code>`).join(' ')}</div>
+      <div class="small">Operations: ${i.operations.map((o) => `<code>${esc(o)}</code>`).join(' ') || '—'}</div>
+      ${i.auth_type && i.auth_type !== 'none' ? `<div class="small" style="margin-top:4px">Credential to connect afterwards: <code>${esc(i.credential_ref || '')}</code> (${esc(i.auth_type)}). ${esc(i.credential_help)}</div>` : ''}</div>`).join('')}
+    <ul class="small muted" style="margin:0;padding-left:18px">${plan.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>`;
+}
+
+// Setup checklist researched from the vendor's documentation: what to do in the vendor's product before it works.
+export function setupHtml(g) {
+  if (!g || !(g.permissions?.length || g.steps?.length || g.common_errors?.length)) return '';
+  return `<div class="callout small" style="margin-top:12px"><b>${icon('check', 13)} Setup checklist</b> <span class="muted">researched from the vendor's documentation${g.model ? ` · ${esc(g.model)}` : ''}</span>
+    ${g.credential ? `<div style="margin-top:6px"><b>Credential:</b> ${esc(g.credential)}</div>` : ''}
+    ${g.permissions?.length ? `<div style="margin-top:6px"><b>Required scopes / permissions:</b> ${g.permissions.map((x) => `<code>${esc(x)}</code>`).join(' ')}</div>` : ''}
+    ${[...(g.steps || []), ...(g.prerequisites || [])].length ? `<ol style="margin:6px 0 0;padding-left:18px">${[...(g.steps || []), ...(g.prerequisites || [])].map((x) => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}
+    ${g.common_errors?.length ? `<details style="margin-top:6px"><summary style="cursor:pointer"><b>Common errors and fixes</b></summary><ul style="margin:4px 0 0;padding-left:18px">
+      ${g.common_errors.map((e) => `<li><code>${esc(e.code)}</code> - ${esc(e.meaning)} <b>Fix:</b> ${esc(e.fix)}</li>`).join('')}</ul></details>` : ''}
+    ${g.sources?.length ? `<div class="muted" style="margin-top:6px">Sources: ${g.sources.map((u) => `<a class="link" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`).join(', ')}</div>` : ''}
+    ${g.unread?.length ? `<div class="muted" style="margin-top:4px">Could not read: ${g.unread.map(esc).join('; ')}</div>` : ''}</div>`;
+}

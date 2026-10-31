@@ -29,6 +29,7 @@ export async function api(path, { method = 'GET', body } = {}) {
 
 const ICONS = {
   home: 'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10',
+  search: 'M11 18a7 7 0 100-14 7 7 0 000 14zM20 20l-4-4',
   grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
   spark: 'M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z',
   plug: 'M9 3v5M15 3v5M6 8h12v4a6 6 0 01-12 0zM12 18v3',

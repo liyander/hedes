@@ -2,7 +2,8 @@ import { $, api, esc, icon, badge, agoCell, pageHead, modal, toast, confirmBox, 
 import { state, isAdmin, isOwner, route } from '../app.js';
 
 export async function render({ el }) {
-  const [org, tokens, demo, notif] = await Promise.all([api('/organizations/current'), api('/tokens'), api('/demo/state'), isAdmin() ? api('/settings/notifications') : Promise.resolve(null)]);
+  const [org, tokens, demo, notif, tpl] = await Promise.all([api('/organizations/current'), api('/tokens'), api('/demo/state'),
+    isAdmin() ? api('/settings/notifications') : Promise.resolve(null), isAdmin() ? api('/settings/notifications/templates') : Promise.resolve(null)]);
   const p = org.policy || {};
   const admin = isAdmin();
   const origin = location.origin;
@@ -17,6 +18,8 @@ export async function render({ el }) {
         <div class="grid-2"><div class="field"><label>Alert after N failed runs in a row</label><input type="number" name="source_failure_alert_after" value="${p.source_failure_alert_after ?? 3}" min="1" max="20" ${admin ? '' : 'disabled'}><div class="hint">A data source that fails this many consecutive runs raises an alert.</div></div>
           <div class="field"><label>Credential rotation period (days)</label><input type="number" name="credential_rotation_days" value="${p.credential_rotation_days ?? 90}" min="7" max="730" ${admin ? '' : 'disabled'}><div class="hint">Older secrets raise a "rotate me" alert.</div></div></div>
         <label class="check"><input type="checkbox" name="require_tests" ${p.require_tests !== false ? 'checked' : ''} ${isOwner() ? '' : 'disabled'}> Require passing safe tests before review <span class="muted small">(platform owner)</span></label>
+        <label class="check"><input type="checkbox" name="self_healing" ${p.self_healing ? 'checked' : ''} ${admin ? '' : 'disabled'}> Self-healing</label>
+        <div class="hint" style="margin:-2px 0 10px 26px">The AI traces every failing integration, data source and workflow, finds the root cause and tries to fix it (fixes that change a configuration still need approval). What it cannot fix is emailed to the administrators with the root cause, what it tried and what it needs. Configure email under Alert delivery.</div>
         ${admin ? '<div class="row end"><button class="btn primary" id="save-policy">Save policy</button></div>' : ''}</div></div>
       <div class="card"><div class="card-head"><h2>API &amp; MCP access</h2><span class="spacer"></span><button class="btn sm" id="new-token">${icon('plus', 13)} New token</button></div><div class="card-body">
         <p class="small muted" style="margin-top:0">Personal tokens act with your role. They can run tools and read data, but can never approve, publish or change policy.</p>
@@ -26,6 +29,7 @@ export async function render({ el }) {
         <p class="small muted">Only tools an admin marks “MCP” in the Tool Registry, and that your role may run, are listed.</p></div></div>
     </div>
     ${notif ? notificationsCard(notif) : ''}
+    ${tpl ? templatesCard(tpl) : ''}
     <div class="card"><div class="card-head"><h2>Members</h2><span class="spacer"></span>${admin ? `<button class="btn sm" id="invite">${icon('plus', 13)} Invite</button>` : ''}</div>
       <div class="table-scroll"><table><thead><tr><th>User</th><th>Email</th><th>Role</th></tr></thead><tbody>
       ${org.members.map((m) => `<tr><td><b>${esc(m.name || m.username)}</b> <span class="muted mono small">${esc(m.username)}</span></td><td>${esc(m.email)}</td>
@@ -43,7 +47,7 @@ export async function render({ el }) {
 
   $('#save-policy', el)?.addEventListener('click', async () => {
     const f = formData($('#policy', el));
-    const body = { allowed_domains: f.allowed_domains.split(',').map((s) => s.trim()).filter(Boolean), ai_monthly_budget_usd: f.ai_monthly_budget_usd, repair_after_failures: f.repair_after_failures, source_failure_alert_after: f.source_failure_alert_after, credential_rotation_days: f.credential_rotation_days };
+    const body = { allowed_domains: f.allowed_domains.split(',').map((s) => s.trim()).filter(Boolean), ai_monthly_budget_usd: f.ai_monthly_budget_usd, repair_after_failures: f.repair_after_failures, source_failure_alert_after: f.source_failure_alert_after, credential_rotation_days: f.credential_rotation_days, self_healing: f.self_healing };
     if (isOwner()) body.require_tests = f.require_tests;
     try { await api('/organizations/current/policy', { method: 'PATCH', body }); toast('Policy saved', 'ok'); } catch (err) { toast(err.message, 'bad'); }
   });
@@ -71,6 +75,7 @@ export async function render({ el }) {
     } catch (err) { toast(err.message, 'bad'); }
     e.target.disabled = false;
   });
+  if (tpl) wireTemplates(el);
   $('#drift', el)?.addEventListener('click', async () => { await api('/demo/drift', { method: 'POST', body: { enabled: !demo.drift } }); route(); });
   $('#new-token', el).addEventListener('click', async () => {
     const r = await modal({ title: 'New API token', body: '<div class="field"><label>Name</label><input type="text" name="name" placeholder="e.g. Claude Desktop" required></div>',
@@ -121,4 +126,52 @@ function notificationsCard(n) {
         <div class="grid-2"><div class="field"><label>From</label><input type="text" name="from" value="${esc(n.email.from)}" placeholder="hedes@example.com"></div>
           <div class="field"><label>To (comma-separated)</label><input type="text" name="to" value="${esc((n.email.to || []).join(', '))}" placeholder="secops@example.com"></div></div></div></div>
     <div class="row end"><button class="btn" id="test-notif">Send test</button><button class="btn primary" id="save-notif">Save</button></div></div></div>`;
+}
+
+
+// Email templates: one per family of alerts. Subject and intro can be customised; empty restores the built-in text.
+function templatesCard(t) {
+  const ph = t.placeholders.map((x) => `<code>{${esc(x)}}</code>`).join(' ');
+  return `<div class="card"><div class="card-head"><h2>Email templates</h2><span class="muted small">one per kind of alert · HTML with a plain-text fallback</span></div>
+    <div class="card-body" id="tpl">
+    <p class="small muted" style="margin-top:0">Each alert is emailed with the template for its kind. Change the subject or intro if you like; leave a field empty to use the built-in text. Placeholders: ${ph}.</p>
+    ${t.templates.map((x) => `<details class="tpl" data-key="${esc(x.key)}" style="border-top:1px solid var(--line);padding:10px 0">
+      <summary style="cursor:pointer" class="row between"><span><b>${esc(x.name)}</b>${Object.keys(x.override).length ? ' ' + badge('info', 'customised') : ''}</span>
+        <span class="muted small">${x.kinds.length ? `for: ${x.kinds.map((k) => esc(k.replace(/_/g, ' '))).join(', ')}` : x.key === 'test' ? 'used by Send test' : 'any other alert'}</span></summary>
+      <div style="margin-top:10px">
+        <div class="field"><label>Subject</label><input type="text" name="subject" maxlength="200" value="${esc(x.override.subject || '')}" placeholder="${esc(x.default.subject)}"></div>
+        <div class="field"><label>Intro</label><textarea name="intro" rows="2" maxlength="1000" placeholder="${esc(x.default.intro)}">${esc(x.override.intro || '')}</textarea></div>
+        <div class="row"><button type="button" class="btn sm" data-tpl-preview="${esc(x.key)}">${icon('eye', 13)} Preview</button>
+          <button type="button" class="btn sm" data-tpl-test="${esc(x.key)}">${icon('send', 13)} Send test email</button></div>
+      </div></details>`).join('')}
+    <div class="row end" style="margin-top:12px"><button class="btn primary" id="save-tpl">Save templates</button></div></div></div>`;
+}
+
+function wireTemplates(el) {
+  const root = $('#tpl', el);
+  const fields = (d) => ({ subject: $('[name=subject]', d).value, intro: $('[name=intro]', d).value });
+  $('#save-tpl', el).addEventListener('click', async () => {
+    const overrides = {};
+    root.querySelectorAll('.tpl').forEach((d) => { overrides[d.dataset.key] = fields(d); });
+    try { await api('/settings/notifications/templates', { method: 'PUT', body: { overrides } }); toast('Email templates saved', 'ok'); route(); } catch (err) { toast(err.message, 'bad'); }
+  });
+  root.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-tpl-preview], [data-tpl-test]');
+    if (!b) return;
+    const d = b.closest('.tpl');
+    b.disabled = true;
+    try {
+      if (b.dataset.tplPreview) {
+        const r = await api('/settings/notifications/templates/preview', { method: 'POST', body: { template: d.dataset.key, ...fields(d) } });
+        await modal({ title: `Preview: ${r.subject}`, wide: true,
+          body: `<div class="small muted" style="margin-bottom:8px">Subject: <b>${esc(r.subject)}</b> · sample data</div><div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">${r.html}</div>
+            <details style="margin-top:10px"><summary class="small muted" style="cursor:pointer">Plain-text version</summary><pre style="white-space:pre-wrap">${esc(r.text)}</pre></details>`,
+          actions: [{ label: 'Close', value: true }] });
+      } else {
+        const r = await api('/settings/notifications/test', { method: 'POST', body: { template: d.dataset.key } });
+        toast(Object.entries(r.results).map(([k, v]) => `${k}: ${v}`).join(' · ') + (Object.keys(fields(d)).some((f) => fields(d)[f]) ? ' (saved version of the template)' : ''), r.ok ? 'ok' : 'bad');
+      }
+    } catch (err) { toast(err.message, 'bad'); }
+    b.disabled = false;
+  });
 }

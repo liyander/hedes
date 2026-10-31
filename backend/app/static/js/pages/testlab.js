@@ -52,9 +52,10 @@ export function executionCards(r) {
   return `<div class="card"><div class="card-head"><h2>Result</h2><span class="spacer"></span>${badge(r.status)}${r.http_status ? ` <span class="badge">HTTP ${r.http_status}</span>` : ''}<span class="muted small">${r.duration_ms} ms · ${r.attempts} attempt(s)</span></div>
     <div class="card-body">
       ${r.error_class ? `<div class="callout bad small" style="margin-bottom:12px"><b>${esc(r.error_class)}</b> — ${esc(r.error)}${r.guide ? `<div style="margin-top:4px">${esc(r.guide[0])} <b>${esc(r.guide[1])}</b></div>` : ''}
-        <div class="row" style="margin-top:8px"><button class="btn sm" data-explain="${r.id}">${icon('spark', 14)} Explain with AI</button>${r.error_class === 'response_drift' ? `<button class="btn sm" data-repair="${r.id}">${icon('wrench', 14)} Propose repair</button>` : ''}
+        <div class="row" style="margin-top:8px"><button class="btn sm" data-explain="${r.id}">${icon('spark', 14)} Explain with AI</button><button class="btn sm" data-heal="${r.id}">${icon('wrench', 14)} Investigate and fix</button>${r.error_class === 'response_drift' ? `<button class="btn sm" data-repair="${r.id}">${icon('wrench', 14)} Propose repair</button>` : ''}
         <a class="btn sm ghost" href="#/monitoring/execution/${r.id}">Open execution</a></div><div data-explanation></div></div>` : ''}
-      <h3 class="small muted" style="margin:0 0 6px">OUTPUT</h3>${json(r.output)}
+      ${r.status === 'succeeded' || (r.output && Object.keys(r.output).length && !(Object.keys(r.output).length === 1 && r.output.value == null))
+        ? `<h3 class="small muted" style="margin:0 0 6px">OUTPUT</h3>${json(r.output)}` : '<p class="small muted" style="margin:0">No output: the request failed before a usable response was received.</p>'}
       ${r.diagnostics?.missing_fields ? `<h3 class="small muted" style="margin:12px 0 6px">OBSERVED RESPONSE STRUCTURE</h3>${json(r.diagnostics.response_shape)}` : ''}
     </div></div>
     <div class="card"><div class="card-head"><h2>Request sent</h2><span class="muted small">credentials redacted</span></div><div class="card-body">${json(r.request)}</div></div>`;
@@ -62,10 +63,15 @@ export function executionCards(r) {
 
 export function explainHandler(root) {
   return async (e) => {
-    const t = e.target.closest('[data-explain], [data-repair]');
+    const t = e.target.closest('[data-explain], [data-repair], [data-heal]');
     if (!t) return;
     t.disabled = true;
     try {
+      if (t.dataset.heal) {
+        const c = await api(`/executions/${t.dataset.heal}/heal`, { method: 'POST' });
+        location.hash = `#/monitoring/healing/${c.id}`;
+        return;
+      }
       if (t.dataset.explain) {
         const r = await api(`/executions/${t.dataset.explain}/explain`, { method: 'POST' });
         root.querySelector('[data-explanation]').innerHTML = `<p class="small" style="margin:10px 0 0">${icon('spark', 13)} ${esc(r.explanation)} <span class="muted mono">${esc(r.model)}</span></p>`;

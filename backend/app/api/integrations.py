@@ -124,6 +124,22 @@ def get_integration(iid: str, p: Principal = Depends(current_principal), db: Ses
             "repairs": [{"id": r.id, "status": r.status, "diagnosis": r.diagnosis, "created_at": iso(r.created_at)} for r in repairs]}
 
 
+@router.post("/integrations/{iid}/setup-guide")
+def setup_guide(iid: str, p: Principal = Depends(require_role("user")), db: Session = Depends(get_db)):
+    """Research what must be configured in the vendor's product (scopes, token type, prerequisites, common errors)
+    from the vendor's documentation, for an existing integration."""
+    from ..models import AISession
+    from ..services import agents
+    from ..services.ai_gateway import Gateway
+    i = integrations.get_integration(db, p.org_id, iid)
+    v = db.get(IntegrationVersion, i.published_version_id or i.latest_version_id)
+    s = db.get(AISession, i.session_id) if i.session_id else None
+    gw = Gateway(db, p.org_id)
+    guide, model = agents.setup_guide(gw, i.slug, v.config, (s.documents if s else None) or [])
+    db.commit()
+    return {**guide, "model": model, "fallback_note": gw.fallback_note()}
+
+
 @router.get("/integrations/{iid}/versions")
 def version_history(iid: str, p: Principal = Depends(current_principal), db: Session = Depends(get_db)):
     i = integrations.get_integration(db, p.org_id, iid)

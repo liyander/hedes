@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import hmac
 import json
 import random
@@ -310,6 +311,45 @@ def redact(req: PreparedRequest, auth: dict) -> dict:
     return preview
 
 
+def check_success(rule: dict | None, body: Any, status: int) -> None:
+    """APIs that answer HTTP 200 for failures (Slack's {"ok": false, "error": "missing_scope"}): a response whose success
+    field does not hold the expected value is a failure, classified from the API's error code."""
+    if not rule:
+        return
+    found, value = jsonpath.query(body, rule["path"])
+    if found and value == rule["equals"]:
+        return
+    code = ""
+    if rule.get("error_path"):
+        ok, err = jsonpath.query(body, rule["error_path"])
+        code = str(err) if ok and err not in (None, "") else ""
+    details = []
+    for path in rule.get("detail_paths") or []:
+        ok, v = jsonpath.query(body, path)
+        if ok and v not in (None, "", [], {}):
+            details.append(f"{path.rsplit('.', 1)[-1]}: {v if isinstance(v, (str, int, float)) else json.dumps(v)[:200]}")
+    cls = (rule.get("error_classes") or {}).get(code, "request_rejected")
+    msg = f"HTTP {status} but the API reported a failure" + (f": {code}" if code else f" ({rule['path']} is not {rule['equals']!r})")
+    raise EngineError(cls, msg + (f" ({'; '.join(details)})" if details else ""), status)
+
+
+def error_detail(raw: bytes, headers: dict) -> str:
+    """A short, readable reason for a failed response: the API's error-message header if it sends one (NVD does),
+    otherwise the visible text of an HTML error page, otherwise the start of the body."""
+    h = {k.lower(): v for k, v in (headers or {}).items()}
+    for name in ("message", "x-error-message", "x-error"):
+        if (h.get(name) or "").strip():
+            return h[name].strip()[:300]
+    text = raw[:20000].decode("utf-8", "replace").strip()
+    if "html" in h.get("content-type", "").lower() or text[:200].lstrip().lower().startswith(("<!doctype", "<html")):
+        text = re.sub(r"(?is)<(script|style|head)\b.*?</\1\s*>", " ", text)
+        text = html.unescape(re.sub(r"(?s)<[^>]+>", " ", text))
+        text = "HTML error page: " + (" ".join(text.split()) or "(no text)")
+    else:
+        text = " ".join(text.split())
+    return text[:300]
+
+
 def _classify_status(code: int) -> str:
     if code == 401:
         return "auth_invalid"
@@ -478,7 +518,7 @@ def execute(config: dict, op_id: str, inputs: dict, *, credential: dict | None =
                             _TOKEN_CACHE.pop(_token_key(auth, secret), None)  # force a fresh token next run
                     if status not in expected:
                         cls = _classify_status(status)
-                        detail = raw_body[:300].decode("utf-8", "replace").strip()
+                        detail = error_detail(raw_body, headers)
                         raise EngineError(cls, f"HTTP {status}" + (f": {detail}" if detail else ""), status)
                     if (resp_cfg.get("format") or "json") == "text":
                         body: Any = {"text": raw_body.decode("utf-8", "replace")}
@@ -489,6 +529,7 @@ def execute(config: dict, op_id: str, inputs: dict, *, credential: dict | None =
                             body = json.loads(raw_body)
                         except ValueError:
                             raise EngineError("response_invalid", "Response body is not valid JSON", status)
+                    check_success(resp_cfg.get("success"), body, status)
                     if first_body is None:
                         first_body = body
                     pages += 1

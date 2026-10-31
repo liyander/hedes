@@ -114,6 +114,13 @@ def validate_config(config: dict) -> dict:
                 jsonpath.parse(path)
             except jsonpath.JSONPathError as e:
                 errors.append({"path": where + f"/response/mapping/{name}", "message": str(e)})
+        rule = resp.get("success") or {}
+        for key, path in [("path", rule.get("path")), ("error_path", rule.get("error_path"))] + [("detail_paths", p) for p in rule.get("detail_paths") or []]:
+            if path:
+                try:
+                    jsonpath.parse(path)
+                except jsonpath.JSONPathError as e:
+                    errors.append({"path": where + f"/response/success/{key}", "message": str(e)})
         if resp.get("items_path"):
             try:
                 jsonpath.parse(resp["items_path"])

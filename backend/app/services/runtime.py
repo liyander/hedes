@@ -120,7 +120,7 @@ def execute_tool(db: Session, actor: Actor, tool: Tool, inputs: dict) -> Executi
                    version_id=version.id, actor_id=actor.user_id, actor_type=actor.kind, status=result.status,
                    http_status=result.http_status, duration_ms=result.duration_ms, attempts=result.attempts,
                    error_class=result.error_class, error=result.error[:2000], request_preview=result.request_preview,
-                   output=result.output if isinstance(result.output, dict) else {"value": result.output},
+                   output=result.output if isinstance(result.output, dict) else ({} if result.output is None else {"value": result.output}),
                    diagnostics=result.diagnostics)
     db.add(ex)
     db.flush()

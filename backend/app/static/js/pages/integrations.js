@@ -2,6 +2,7 @@ import { $, api, esc, icon, badge, method, agoCell, pageHead, emptyState, toast,
 import { go, route, isAdmin, state } from '../app.js';
 import { askAbout } from '../assistant.js';
 import { connectModal } from './credentials.js';
+import { setupHtml } from './studio.js';
 
 export async function render(ctx) {
   if (ctx.params[0] === 'new') return renderNew(ctx);
@@ -110,6 +111,8 @@ async function renderDetail({ el, params }) {
         <div class="stack"><div class="card card-pad"><h2 style="margin-bottom:10px">Details</h2><dl class="kv">
           <dt>Slug</dt><dd class="mono">${esc(i.slug)}</dd><dt>Transport</dt><dd>${esc(cfg.transport)}</dd><dt>Auth</dt><dd><code>${esc(auth.type)}</code>${auth.scopes ? ` scopes: ${auth.scopes.map(esc).join(', ')}` : ''}</dd>
           <dt>Source</dt><dd>${esc(v.source)}</dd><dt>Created</dt><dd>${esc(v.created_by)} · ${agoCell(v.created_at)}</dd><dt>Live version</dt><dd>${esc(i.published_version || 'not published')}</dd></dl></div>
+          <div class="card card-pad"><div class="row between"><h2>Setup in ${esc(cfg.name)}</h2><button class="btn sm" data-a="research">${icon('search', 13)} Research setup</button></div>
+            <div id="setup-guide" class="small muted" style="margin-top:6px">Reads the vendor's documentation for these operations and lists the scopes, token type, prerequisites and common errors.</div></div>
           ${i.tools.length ? `<div class="card"><div class="card-head"><h2>Published tools</h2></div><div class="card-body">${i.tools.map((t) => `<div class="op-row">${method(t.method)}<span class="mono small grow">${esc(t.name)}</span>${t.mcp_enabled ? badge('info', 'MCP') : ''}</div>`).join('')}</div></div>` : ''}
           ${i.repairs.length ? `<div class="card"><div class="card-head"><h2>Repair proposals</h2></div><div class="card-body">${i.repairs.map((r) => `<div class="finding">${badge(r.status)}<div class="small">${esc(r.diagnosis.summary || r.diagnosis.missing_fields?.join(', ') || '')}<div class="muted">${agoCell(r.created_at)}</div></div></div>`).join('')}</div></div>` : ''}
         </div></div>`;
@@ -180,6 +183,18 @@ async function renderDetail({ el, params }) {
         return route();
       }
       const a = t.dataset.a;
+      if (a === 'research') {
+        const box = $('#setup-guide', el);
+        t.disabled = true;
+        box.innerHTML = '<span class="spinner"></span> Reading the vendor documentation…';
+        try {
+          const g = await api(`/integrations/${i.id}/setup-guide`, { method: 'POST' });
+          box.innerHTML = (g.fallback_note ? `<div class="callout warn small">${esc(g.fallback_note.replace(/\*\*/g, ''))}</div>` : '') +
+            (setupHtml(g) || '<p class="muted">The documentation lists no special setup for these operations.</p>');
+        } catch (err) { box.textContent = err.message; }
+        t.disabled = false;
+        return;
+      }
       if (a === 'discuss') return askAbout({ type: 'integration', id: i.id, label: i.name }, `Explain the ${i.name} integration and what I should do next.`);
       if (a === 'guide') { const g = $('#guide', el); g.classList.toggle('collapsed'); try { localStorage.setItem('hedes-guide-collapsed', g.classList.contains('collapsed') ? '1' : '0'); } catch (x) { /* ignore */ } return; }
       t.disabled = true;

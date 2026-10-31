@@ -29,6 +29,15 @@ import httpx  # noqa: E402
 import uvicorn  # noqa: E402
 
 from app.main import app  # noqa: E402
+from app.services import docs_search  # noqa: E402
+
+
+def _offline(url, limit):
+    raise docs_search.DocsError("offline in tests")
+
+
+docs_search.real_get = docs_search._get
+docs_search._get = _offline  # no test may reach the internet for documentation; tests that need it install a fake
 
 
 @pytest.fixture(scope="session")
