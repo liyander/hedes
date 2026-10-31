@@ -14,10 +14,14 @@ from .engine import ERROR_GUIDE
 from .integrations import org_policy
 
 
-def _recent_alert(db: Session, org_id: str, kind: str, integration_id: str | None, minutes: int = 60) -> bool:
+def _recent_alert(db: Session, org_id: str, kind: str, integration_id: str | None, minutes: int = 60,
+                  include_acknowledged: bool = False) -> bool:
     since = utcnow() - timedelta(minutes=minutes)
-    return db.scalars(select(Alert).where(Alert.organization_id == org_id, Alert.kind == kind, Alert.integration_id == integration_id,
-                                          Alert.created_at >= since, Alert.acknowledged.is_(False))).first() is not None
+    q = select(Alert).where(Alert.organization_id == org_id, Alert.kind == kind, Alert.integration_id == integration_id,
+                            Alert.created_at >= since)
+    if not include_acknowledged:
+        q = q.where(Alert.acknowledged.is_(False))
+    return db.scalars(q).first() is not None
 
 
 def open_repair(db: Session, integration_id: str) -> RepairProposal | None:
