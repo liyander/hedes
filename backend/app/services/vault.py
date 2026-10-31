@@ -24,7 +24,29 @@ def _fernet() -> Fernet:
     return Fernet(get_settings().secret_encryption_key.encode())
 
 
+class EnvRefNotAllowed(ValueError):
+    pass
+
+
+def _env_allowed(org_id: str | None) -> set[str] | None:
+    """None = any variable (platform secrets). Organisation secrets may only name operator-approved variables, otherwise
+    anyone who can create a connection could have the server send its own secrets (JWT key, vault key, AI keys) out."""
+    return None if org_id is None else get_settings().connection_env_names
+
+
+def check_env_refs(payload: dict, org_id: str | None) -> None:
+    allowed = _env_allowed(org_id)
+    if allowed is None:
+        return
+    for v in payload.values():
+        m = ENV_REF.match(v) if isinstance(v, str) else None
+        if m and m.group(1) not in allowed:
+            raise EnvRefNotAllowed(f"Environment variable {m.group(1)} is not allowed for credentials. "
+                                   "The server operator must list it in CONNECTION_ENV_VARS.")
+
+
 def store_secret(db: Session, org_id: str | None, payload: dict) -> str:
+    check_env_refs(payload, org_id)
     row = Secret(organization_id=org_id, ciphertext=_fernet().encrypt(json.dumps(payload).encode()).decode())
     db.add(row)
     db.flush()
@@ -41,18 +63,20 @@ def read_secret(db: Session, ref: str | None, org_id: str | None) -> dict | None
         payload = json.loads(_fernet().decrypt(row.ciphertext.encode()))
     except InvalidToken:
         return None
-    return {k: resolve_env(v) for k, v in payload.items()}
+    allowed = _env_allowed(org_id)
+    return {k: resolve_env(v, allowed) for k, v in payload.items()}
 
 
 ENV_REF = re.compile(r"^env:([A-Z][A-Z0-9_]{1,63})$")
 
 
-def resolve_env(value):
-    """A stored value of the form ``env:NAME`` is read from the server's environment at use time (nothing secret is stored)."""
+def resolve_env(value, allowed: set[str] | None = None):
+    """A stored value of the form ``env:NAME`` is read from the server's environment at use time (nothing secret is stored).
+    ``allowed`` restricts which names resolve (None = any); a disallowed name resolves to "" (an unusable credential)."""
     if isinstance(value, str):
         m = ENV_REF.match(value)
         if m:
-            return os.environ.get(m.group(1), "")
+            return os.environ.get(m.group(1), "") if allowed is None or m.group(1) in allowed else ""
     return value
 
 

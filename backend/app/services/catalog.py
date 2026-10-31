@@ -74,7 +74,7 @@ def build_from_template(template_id: str, variables: dict) -> dict:
         values[var["name"]] = v
     text = json.dumps({k: v for k, v in copy.deepcopy(doc).items() if k != "template"})
     for name, v in values.items():
-        text = text.replace("{{" + name + "}}", v)
+        text = text.replace("{{" + name + "}}", json.dumps(v)[1:-1])  # JSON-escaped: a value cannot alter the structure
     cfg = json.loads(text)
     return normalize_config(cfg)
 

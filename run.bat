@@ -53,7 +53,8 @@ if /i "%~1"=="test" (
 rem --- 2b. reset: keep a timestamped backup of the database, then start with a clean one ---
 if /i "%MODE%"=="reset" (
   for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmm"') do set "STAMP=%%i"
-  echo [H.E.D.E.S] This moves backend\data\*.db to a backup so the next start is empty. Accounts, integrations, credentials and data are not deleted.
+  echo [H.E.D.E.S] This moves backend\data\*.db aside as a .bak file and starts with an EMPTY database.
+  echo             Existing accounts, integrations, credentials and data will no longer appear; restore the .bak file to get them back.
   choice /m "Continue"
   if errorlevel 2 exit /b 0
   for %%F in (backend\data\*.db backend\data\*.db-wal backend\data\*.db-shm) do move /y "%%F" "%%F.bak-!STAMP!" >nul
@@ -86,8 +87,12 @@ if not errorlevel 1 (
 
 echo.
 echo   H.E.D.E.S  ^>  %PUBLIC_BASE_URL%
-echo   Accounts   ^>  builder / admin / owner
-if defined SEED_PASSWORD (echo   Password   ^>  %SEED_PASSWORD%) else (echo   Password   ^>  SEED_PASSWORD in .env)
+if /i "%DEMO_MODE%"=="true" (
+  echo   Accounts   ^>  builder / admin / owner
+  if defined SEED_PASSWORD (echo   Password   ^>  %SEED_PASSWORD%) else (echo   Password   ^>  SEED_PASSWORD in .env)
+) else (
+  echo   Accounts   ^>  first visit: create the administrator account, then add users under Users
+)
 echo   API docs   ^>  %PUBLIC_BASE_URL%/docs
 if /i "%DEMO_MODE%"=="true" (
   echo   Mode       ^>  DEMO: bundled mock APIs and sample data are ON

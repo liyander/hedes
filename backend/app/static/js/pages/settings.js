@@ -55,6 +55,14 @@ export async function render({ el }) {
     if (g('slack') || $('[name=rm_slack]', $('#notif', el))?.checked) body.slack_webhook_url = g('slack').trim();
     try { await api('/settings/notifications', { method: 'PUT', body }); toast('Alert delivery saved', 'ok'); route(); } catch (err) { toast(err.message, 'bad'); }
   });
+  $('#gmail-preset', el)?.addEventListener('click', () => {
+    const f = $('#notif', el);
+    const set = (n, v) => { $(`[name=${n}]`, f).value = v; };
+    set('host', 'smtp.gmail.com'); set('port', 587); set('security', 'starttls');
+    $('[name=password]', f).placeholder = '16-letter app password';
+    $('#gmail-help', el).hidden = false;
+    $('[name=username]', f).focus();
+  });
   $('#test-notif', el)?.addEventListener('click', async (e) => {
     e.target.disabled = true;
     try {
@@ -101,7 +109,10 @@ function notificationsCard(n) {
     <div class="split even"><div><h3 class="small muted">SLACK</h3>
         <div class="field"><label>Incoming webhook URL</label><input type="password" name="slack" autocomplete="new-password" placeholder="${n.slack.configured ? `configured ${esc(n.slack.hint)} — leave blank to keep` : 'https://hooks.slack.com/services/…'}">
           <div class="hint">Create one in Slack: Apps → Incoming Webhooks. ${n.slack.configured ? '<label class="check" style="display:inline-flex"><input type="checkbox" name="rm_slack"> remove it</label>' : ''}</div></div></div>
-      <div><h3 class="small muted">EMAIL (SMTP)</h3>
+      <div><div class="row between"><h3 class="small muted">EMAIL (SMTP)</h3><button type="button" class="btn sm" id="gmail-preset">Use Gmail</button></div>
+        <div class="callout info small" id="gmail-help" ${n.email.host === 'smtp.gmail.com' ? '' : 'hidden'} style="margin-bottom:10px">
+          Gmail: turn on 2-Step Verification, then create an <b>app password</b> at <span class="mono">myaccount.google.com/apppasswords</span>.
+          Username = your full Gmail address; paste the 16-letter app password (spaces are fine). Your normal Google password will not work.</div>
         <div class="grid-2"><div class="field"><label>Server</label><input type="text" name="host" value="${esc(n.email.host)}" placeholder="smtp.example.com"></div>
           <div class="field"><label>Port</label><input type="number" name="port" value="${n.email.port}"></div></div>
         <div class="grid-2"><div class="field"><label>Security</label><select name="security">${['starttls', 'ssl', 'none'].map((s) => `<option ${n.email.security === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>

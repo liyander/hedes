@@ -99,6 +99,9 @@ def ensure_demo_sources(db: Session) -> None:
     db.commit()
 
 
+DEFAULT_POLICY = {"allowed_domains": [], "ai_monthly_budget_usd": 25, "require_tests": True, "repair_after_failures": 2}
+
+
 def run(db: Session) -> None:
     seed_ai_providers(db)
     if db.scalars(select(User)).first():
@@ -106,9 +109,11 @@ def run(db: Session) -> None:
         ensure_demo_sources(db)
         return
     s = get_settings()
+    if not s.demo_mode:
+        db.commit()  # real mode: no accounts; the first visitor creates the administrator (POST /auth/setup)
+        return
     password = s.seed_password or secrets.token_urlsafe(10)
-    org = Organization(name="Acme Corp", policy={"allowed_domains": [], "ai_monthly_budget_usd": 25,
-                                                 "require_tests": True, "repair_after_failures": 2})
+    org = Organization(name="Acme Corp", policy=dict(DEFAULT_POLICY))
     db.add(org)
     db.flush()
     users = {}

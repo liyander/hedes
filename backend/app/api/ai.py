@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -11,7 +12,8 @@ from ..core.db import get_db, new_id, utcnow
 from ..core.security import Principal, current_principal, require_human, require_role
 from ..models import AIMessage, AIModel, AIProvider, AISession, UsageRecord
 from ..services import audit, openapi, orchestrator, vault
-from ..services.ai_gateway import TASKS, Gateway, bedrock_region
+from ..services import ai_gateway
+from ..services.ai_gateway import TASKS, Gateway, ProviderError, bedrock_region
 from .common import iso
 
 router = APIRouter(prefix="/api/v1/ai", tags=["AI orchestration"])
@@ -141,8 +143,8 @@ def list_providers(p: Principal = Depends(current_principal), db: Session = Depe
 PROVIDER_TYPES = "^(openai_compatible|anthropic|gemini|bedrock)$"
 
 
-class ProviderIn(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
+class ProviderDraft(BaseModel):
+    """Connection settings for a provider that is not saved yet (listing models, testing before saving)."""
     provider_type: str = Field(pattern=PROVIDER_TYPES)
     base_url: str = Field(default="", max_length=500)
     api_key: str = Field(default="", max_length=2000)  # Bedrock: a Bedrock API key (bearer token)
@@ -150,6 +152,11 @@ class ProviderIn(BaseModel):
     aws_access_key_id: str = Field(default="", max_length=128)
     aws_secret_access_key: str = Field(default="", max_length=2000)
     aws_session_token: str = Field(default="", max_length=8000)
+    model_id: str = Field(default="", max_length=300)
+
+
+class ProviderIn(ProviderDraft):
+    name: str = Field(min_length=1, max_length=120)
     model_id: str = Field(min_length=1, max_length=300)
     purposes: list[str] = ["general"]
 
@@ -220,8 +227,8 @@ def _bedrock_base(body) -> str:
     return f"https://bedrock-runtime.{region}.amazonaws.com"
 
 
-@router.post("/providers")
-def register_provider(body: ProviderIn, p: Principal = Depends(require_human("owner")), db: Session = Depends(get_db)):
+def _target(body: ProviderDraft) -> tuple[str, dict | None]:
+    """Base URL and secret for provider settings, validated the same way for saving, listing models and testing."""
     if body.provider_type == "bedrock":
         base = _bedrock_base(body)
         if _secret_for(body) is None:
@@ -230,7 +237,17 @@ def register_provider(body: ProviderIn, p: Principal = Depends(require_human("ow
         base = (body.base_url or DEFAULT_BASE[body.provider_type]).rstrip("/")
     if not base.startswith(("https://", "http://")):
         raise HTTPException(422, "Base URL must be http(s)")
-    secret = _secret_for(body)
+    return base, _secret_for(body)
+
+
+def _live_secret(secret: dict | None) -> dict:
+    # Platform (owner) secrets may name any environment variable, exactly as when the saved provider is used.
+    return {k: vault.resolve_env(v) for k, v in (secret or {}).items()}
+
+
+@router.post("/providers")
+def register_provider(body: ProviderIn, p: Principal = Depends(require_human("owner")), db: Session = Depends(get_db)):
+    base, secret = _target(body)
     pr = AIProvider(name=body.name, provider_type=body.provider_type, base_url=base,
                     secret_ref=vault.store_secret(db, None, secret) if secret else None)
     db.add(pr)
@@ -276,31 +293,29 @@ def update_provider(pid: str, body: ProviderPatch, p: Principal = Depends(requir
     return provider_view(db, pr)
 
 
-class DiscoverIn(BaseModel):
-    provider_type: str = Field(pattern="^(openai_compatible|gemini)$")
-    base_url: str = Field(default="", max_length=500)
-    api_key: str = Field(default="", max_length=2000)
-
-
 @router.post("/providers/discover-models")
-def discover_models(body: DiscoverIn, p: Principal = Depends(require_human("owner"))):
-    """List the model ids an endpoint offers (GET /models) so the UI can offer a pick-list. Nothing is stored."""
-    import httpx
-    base = (body.base_url or DEFAULT_BASE[body.provider_type]).rstrip("/")
-    if not base.startswith(("https://", "http://")):
-        raise HTTPException(422, "Base URL must be http(s)")
+def discover_models(body: ProviderDraft, p: Principal = Depends(require_human("owner"))):
+    """List the model ids the endpoint offers so the UI can show a pick-list. Nothing is stored."""
+    base, secret = _target(body)
     try:
-        if body.provider_type == "gemini":
-            r = httpx.get(base + "/models", headers={"x-goog-api-key": body.api_key}, timeout=15)
-        else:
-            r = httpx.get(base + "/models", headers={"Authorization": f"Bearer {body.api_key}"} if body.api_key else {}, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-    except (httpx.HTTPError, ValueError) as e:
-        raise HTTPException(502, f"Could not list models: {str(e)[:200]}")
-    rows = data.get("data") or data.get("models") or []
-    ids = sorted({(m.get("id") or m.get("name", "")).replace("models/", "") for m in rows if isinstance(m, dict)})
-    return {"models": [i for i in ids if i][:300]}
+        ids = ai_gateway.list_models(body.provider_type, base, _live_secret(secret))
+    except ProviderError as e:
+        raise HTTPException(502, f"Could not list models: {str(e)[:300]}")
+    return {"models": ids[:500]}
+
+
+@router.post("/providers/test-config")
+def test_config(body: ProviderDraft, p: Principal = Depends(require_human("owner"))):
+    """Send one tiny request with unsaved settings, so a provider can be checked before it is added. Nothing is stored."""
+    if not body.model_id.strip():
+        raise HTTPException(422, "Pick a model to test")
+    base, secret = _target(body)
+    started = time.monotonic()
+    try:
+        reply = ai_gateway.probe(body.provider_type, base, _live_secret(secret), body.model_id.strip())
+    except ProviderError as e:
+        return {"ok": False, "error": str(e)[:400]}
+    return {"ok": True, "reply": reply.strip()[:200], "latency_ms": int((time.monotonic() - started) * 1000)}
 
 
 @router.delete("/providers/{pid}")

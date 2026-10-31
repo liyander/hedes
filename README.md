@@ -22,6 +22,8 @@ creates `backend\.venv`, installs dependencies, copies `.env.example` to `.env`,
 Python 3.10+ is the only prerequisite. The launcher always starts in **real-data mode** (no mock APIs or sample data).
 Other modes: `run.bat demo` (turns the bundled mocks on, for demos only) and `run.bat reset` (moves the database to a
 timestamped backup so you start empty - use it once if your database was created by an earlier demo-mode build).
+To remove only the demo/mock data and keep accounts, settings, AI providers and your own work, run
+`cd backend && python -m app.maintenance purge-demo` (it backs up the database first).
 
 **Manually:**
 
@@ -66,7 +68,7 @@ Every source lands in one of three common shapes (event/alert, user, device; eac
 raw record), with per-field transforms, incremental sync, de-duplication, a dead-letter queue, retries with
 backoff/jitter and `Retry-After`, per-connector rate caps, interval **or cron** schedules and a health page.
 Users and devices are upserted; events are append-only. Secrets can be stored in the vault or read from the server's
-environment with `env:NAME`. Adding another source is writing a YAML file (or asking the assistant to draft one).
+environment with `env:NAME` (organisation credentials may only use variables listed in `CONNECTION_ENV_VARS`). Adding another source is writing a YAML file (or asking the assistant to draft one).
 
 Only the CISA feed is verified end to end against the live internet by the test suite; the others need your accounts, and
 are validated and exercised with the engine's request/response tests.

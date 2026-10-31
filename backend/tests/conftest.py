@@ -20,7 +20,7 @@ os.environ.update({
     "SEED_PASSWORD": "test-password-123",
     "JWT_SECRET": "test-secret-" + "x" * 32,
     "SECRET_ENCRYPTION_KEY": "uLpQ4cW7l1PZxH6m0bQy3VqB2T9a8kq1xK3lJf0Hn5Y=",
-    "RUN_SCHEDULER": "false", "DEMO_MODE": "true",
+    "RUN_SCHEDULER": "false", "DEMO_MODE": "true", "CONNECTION_ENV_VARS": "SOME_VAR",
     "OPENAI_API_KEY": "", "ANTHROPIC_API_KEY": "", "GEMINI_API_KEY": "",
 })
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

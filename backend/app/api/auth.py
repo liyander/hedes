@@ -65,6 +65,38 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
     return me_view(db, Principal(user, m.organization_id, m.role, "session"))
 
 
+class SetupIn(BaseModel):
+    organization: str = Field(min_length=1, max_length=120)
+    username: str = Field(pattern=r"^[a-z0-9_.-]{3,32}$")
+    name: str = Field(default="", max_length=120)
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=255)
+    password: str = Field(min_length=10, max_length=200)
+
+
+@router.get("/auth/setup")
+def setup_status(db: Session = Depends(get_db)):
+    return {"needs_setup": db.scalars(select(User.id)).first() is None}
+
+
+@router.post("/auth/setup")
+def first_admin_setup(body: SetupIn, response: Response, db: Session = Depends(get_db)):
+    """Create the organisation and its first account (owner: full administration, including AI providers).
+    Only possible while no account exists; afterwards accounts are created by administrators."""
+    if db.scalars(select(User.id)).first() is not None:
+        raise HTTPException(409, "Setup is already complete. Ask an administrator for an account.")
+    from ..seed import DEFAULT_POLICY
+    org = Organization(name=body.organization.strip(), policy=dict(DEFAULT_POLICY))
+    u = User(email=body.email.lower(), username=body.username, name=body.name.strip(), password_hash=hash_password(body.password))
+    db.add_all([org, u])
+    db.flush()
+    m = Membership(user_id=u.id, organization_id=org.id, role="owner")
+    db.add(m)
+    audit.record(db, org.id, u, "platform.setup", org.name, administrator=u.username)
+    db.commit()
+    _set_cookie(response, issue_session(u.id, org.id))
+    return me_view(db, Principal(u, org.id, "owner", "session"))
+
+
 @router.post("/auth/refresh")
 def refresh_session(response: Response, p: Principal = Depends(current_principal)):
     if p.via != "session":

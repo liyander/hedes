@@ -210,7 +210,89 @@ def _call_bedrock(base: str, key: str, model: str, system: str, messages: list, 
     return text, u.get("inputTokens"), u.get("outputTokens")
 
 
+def _get_json(url: str, headers: dict, params: dict | None = None) -> dict:
+    try:
+        r = httpx.get(url, headers=headers, params=params, timeout=20)
+    except httpx.TimeoutException:
+        raise ProviderError("timeout while listing models")
+    except httpx.TransportError as e:
+        raise ProviderError(f"network error: {e}")
+    if r.status_code >= 400:
+        raise ProviderError(f"HTTP {r.status_code}: {r.text[:300]}", retryable=False)
+    try:
+        return r.json()
+    except ValueError:
+        raise ProviderError("the endpoint did not return JSON", retryable=False)
+
+
+def _bedrock_models(region: str, secret: dict) -> list[str]:
+    """Text models usable on demand in the region, plus inference profiles (newer models are only invocable through those)."""
+    from datetime import datetime, timezone
+    from urllib.parse import urlencode
+
+    from .engine import sigv4_authorization
+    host = f"bedrock.{region}.amazonaws.com"
+
+    def get(path: str, query: dict) -> dict:
+        headers = {"Accept": "application/json"}
+        if secret.get("bearer_token"):
+            headers["Authorization"] = f"Bearer {secret['bearer_token']}"
+        elif secret.get("access_key_id") and secret.get("secret_access_key"):
+            amz_date = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            headers["x-amz-date"] = amz_date
+            if secret.get("session_token"):
+                headers["x-amz-security-token"] = secret["session_token"]
+            headers["Authorization"] = sigv4_authorization("GET", host, path, query, b"", secret["access_key_id"], secret["secret_access_key"],
+                                                           region, "bedrock", amz_date, secret.get("session_token"))
+        else:
+            raise ProviderError("No AWS credentials: add an access key pair or a Bedrock API key", retryable=False)
+        return _get_json(f"https://{host}{path}?{urlencode(sorted(query.items()))}" if query else f"https://{host}{path}", headers)
+
+    found = get("/foundation-models", {"byOutputModality": "TEXT"})
+    on_demand = [m["modelId"] for m in found.get("modelSummaries") or []
+                 if "ON_DEMAND" in (m.get("inferenceTypesSupported") or []) and m.get("modelId")]
+    try:
+        profiles = [p["inferenceProfileId"] for p in get("/inference-profiles", {"maxResults": "1000"}).get("inferenceProfileSummaries") or []
+                    if p.get("inferenceProfileId")]
+    except ProviderError:
+        profiles = []  # older regions / permissions without ListInferenceProfiles: on-demand models are still useful
+    return sorted(set(profiles)) + sorted(set(on_demand) - set(profiles))
+
+
+def list_models(provider_type: str, base_url: str, secret: dict) -> list[str]:
+    """Model ids the endpoint offers, for a pick-list. Raises ProviderError with the provider's message."""
+    base = base_url.rstrip("/")
+    if provider_type == "bedrock":
+        return _bedrock_models(bedrock_region(base, secret), secret)
+    if provider_type == "anthropic":
+        data = _get_json((base or "https://api.anthropic.com") + "/v1/models", {"x-api-key": secret.get("api_key", ""), "anthropic-version": "2023-06-01"},
+                         {"limit": 1000})
+        return sorted({m["id"] for m in data.get("data") or [] if m.get("id")})
+    if provider_type == "gemini":
+        data = _get_json(base + "/models", {"x-goog-api-key": secret.get("api_key", "")}, {"pageSize": 1000})
+        return sorted({m["name"].replace("models/", "") for m in data.get("models") or []
+                       if m.get("name") and "generateContent" in (m.get("supportedGenerationMethods") or ["generateContent"])})
+    key = secret.get("api_key", "")
+    try:
+        data = _get_json(base + "/models", {"Authorization": f"Bearer {key}"} if key else {})
+    except ProviderError:
+        m = re.match(r"https://bedrock-runtime\.([a-z0-9-]+)\.amazonaws\.com", base)
+        if not m:
+            raise
+        return _bedrock_models(m.group(1), {"bearer_token": key})  # Bedrock's OpenAI-compatible endpoint with a Bedrock API key
+    rows = data.get("data") or data.get("models") or []
+    return sorted({(r.get("id") or r.get("name", "")).replace("models/", "") for r in rows if isinstance(r, dict)} - {""})
+
+
 ADAPTERS = {"openai_compatible": _call_openai, "anthropic": _call_anthropic, "gemini": _call_gemini, "bedrock": _call_bedrock}
+
+
+def probe(provider_type: str, base_url: str, secret: dict, model_id: str) -> str:
+    """One tiny request with unsaved settings (nothing recorded). Returns the reply or raises ProviderError."""
+    key = json.dumps(secret) if provider_type == "bedrock" else secret.get("api_key", "")
+    text, _, _ = ADAPTERS[provider_type](base_url, key, model_id, "You are a connectivity check.",
+                                          [{"role": "user", "content": "Reply with the single word: ready"}], False, min(30, get_settings().ai_timeout_seconds))
+    return text
 
 
 # ---------------------------------------------------------------------------- gateway

@@ -27,6 +27,30 @@ RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 _RECENT: dict[str, float] = {}
 _RECENT_LOCK = threading.Lock()
 DEDUPE_SECONDS = 600
+GMAIL_HOSTS = {"smtp.gmail.com", "smtp.googlemail.com"}
+
+
+def is_gmail(host: str) -> bool:
+    return (host or "").strip().lower() in GMAIL_HOSTS
+
+
+def normalize_gmail(email: dict, password: str | None) -> tuple[dict, str | None]:
+    """Gmail SMTP rules: TLS on 587 (STARTTLS) or 465 (SSL), sign in with the full Gmail address and a 16-character app
+    password (Google shows it in groups of four; the spaces are not part of it), send From that same address."""
+    email = {**email, "host": email["host"].strip().lower()}
+    if (email.get("port"), email.get("security")) not in ((587, "starttls"), (465, "ssl")):
+        email["port"], email["security"] = 587, "starttls"
+    user = (email.get("username") or "").strip()
+    if "@" not in user:
+        raise ValueError("For Gmail the username is your full Gmail / Google Workspace address, e.g. alerts@gmail.com")
+    email["username"] = user
+    email["from"] = (email.get("from") or "").strip() or user
+    if password is not None:
+        password = "".join(password.split())
+        if len(password) != 16 or not password.isalpha():
+            raise ValueError("Gmail needs a 16-letter app password (Google Account > Security > 2-Step Verification > App passwords), "
+                             "not your normal Google password")
+    return email, password
 
 
 def config_of(org: Organization | None) -> dict:
@@ -73,7 +97,13 @@ def _email(db: Session, org: Organization, cfg: dict, subject: str, text: str) -
         if security == "starttls":
             smtp.starttls(context=ctx)
         if e.get("username") and password:
-            smtp.login(e["username"], password)
+            try:
+                smtp.login(e["username"], password)
+            except smtplib.SMTPAuthenticationError as err:
+                if is_gmail(e["host"]):
+                    raise RuntimeError("Gmail rejected the sign-in. Use an app password (2-Step Verification must be on) and the full "
+                                       "Gmail address as the username; a normal Google password does not work.") from err
+                raise
         smtp.send_message(msg)
 
 

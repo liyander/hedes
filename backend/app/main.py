@@ -6,14 +6,14 @@ import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import ai, approvals, assistant, auth, connections, integrations, notifications, runtime, sources, templates, workflows
+from .api import ai, approvals, assistant, auth, connections, integrations, notifications, runtime, sources, templates, users, workflows
 from .core.config import STATIC_DIR, get_settings
 from .core.db import init_db, session_scope
 from .mock import services as mock_services
-from .services import notify  # noqa: F401  (registers the alert-delivery hooks)
+from .services import notify, vault  # noqa: F401  (notify registers the alert-delivery hooks)
 from .services.ingest import scheduler_loop as ingest_scheduler_loop
 from .services.workflows import scheduler_loop
 
@@ -38,7 +38,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="H.E.D.E.S", version="1.0.0", lifespan=lifespan,
               description="AI-assisted, configuration-driven integration platform with admin-governed activation.")
 
-for r in (auth.router, ai.router, integrations.router, approvals.router, connections.router, runtime.router,
+for r in (auth.router, users.router, ai.router, integrations.router, approvals.router, connections.router, runtime.router,
           runtime.mcp_router, notifications.router, assistant.router, sources.router, templates.router, workflows.router, workflows.hooks_router):
     app.include_router(r)
 if get_settings().demo_mode:
@@ -56,9 +56,18 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"  # revalidate (ETag) so updated code is never run from a stale cache
+    elif request.url.path.startswith("/static-v/") and response.status_code == 200:
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"  # the URL changes whenever a file does
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@app.exception_handler(vault.EnvRefNotAllowed)
+async def env_ref_not_allowed(_request: Request, exc: vault.EnvRefNotAllowed):
+    return JSONResponse({"detail": str(exc)}, status_code=422)
 
 
 @app.exception_handler(Exception)
@@ -72,9 +81,23 @@ def health():
     return {"ok": True}
 
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+_static = StaticFiles(directory=STATIC_DIR)
+app.mount("/static", _static, name="static")
+
+
+def asset_version() -> str:
+    """Changes whenever any front-end file changes (checked per page load, so edits apply without a restart)."""
+    return format(max(f.stat().st_mtime_ns for f in STATIC_DIR.rglob("*") if f.is_file()) // 1_000_000, "x")
+
+
+@app.get("/static-v/{version}/{path:path}", include_in_schema=False)
+async def versioned_static(version: str, path: str, request: Request):
+    # Browsers cache these forever; a new version gives every file a new URL, so stale code is never reused. Module imports
+    # are relative, so the whole module graph loads from one version (no mix of old and new files).
+    return await _static.get_response(path, request.scope)
 
 
 @app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace('"/static/', f'"/static-v/{asset_version()}/')
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})

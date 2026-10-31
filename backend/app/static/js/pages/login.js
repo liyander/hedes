@@ -15,7 +15,10 @@ function card(form) {
     </div></div></div>`;
 }
 
-export function renderLogin(app) {
+export async function renderLogin(app) {
+  let setup = false;
+  try { setup = (await api('/auth/setup')).needs_setup; } catch (e) { /* server unreachable: show the sign-in form */ }
+  if (setup) return renderSetup(app);
   app.innerHTML = card(`
     <div class="brand">${LOGO}<div><b>H.E.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></div>
     <h1>Welcome back</h1>
@@ -37,6 +40,41 @@ export function renderLogin(app) {
     try {
       state.user = await api('/auth/login', { method: 'POST', body: { username: $('#u').value, password: $('#pw').value } });
       go('#/dashboard');
+    } catch (err) {
+      $('#err').textContent = err.message;
+      btn.disabled = false;
+    }
+  });
+}
+
+// First run: no account exists yet. The first person creates the organisation and its administrator (owner).
+function renderSetup(app) {
+  app.innerHTML = card(`
+    <div class="brand">${LOGO}<div><b>H.E.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></div>
+    <h1>Set up H.E.D.E.S</h1>
+    <p>No accounts exist yet. Create the administrator account. It has full control, including AI providers and user management;
+      everyone else is added by an administrator afterwards.</p>
+    <form id="setup">
+      <div class="field"><label>Organisation name</label><input type="text" name="organization" required maxlength="120" placeholder="e.g. Acme Security"></div>
+      <div class="grid-2"><div class="field"><label>Username</label><input type="text" name="username" required pattern="[a-z0-9_.\-]{3,32}" autocomplete="username" placeholder="lowercase, 3-32 chars"></div>
+        <div class="field"><label>Full name</label><input type="text" name="name" maxlength="120"></div></div>
+      <div class="field"><label>Email</label><input type="email" name="email" required autocomplete="email"></div>
+      <div class="grid-2"><div class="field"><label>Password (10+ characters)</label><input type="password" name="password" required minlength="10" autocomplete="new-password"></div>
+        <div class="field"><label>Repeat password</label><input type="password" name="password2" required minlength="10" autocomplete="new-password"></div></div>
+      <button class="btn primary" type="submit">Create administrator</button>
+      <div class="login-err" id="err" role="alert"></div>
+    </form>`);
+  $('[name=organization]').focus();
+  $('#setup').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    if (f.password !== f.password2) { $('#err').textContent = 'The passwords do not match'; return; }
+    const btn = e.target.querySelector('button');
+    btn.disabled = true;
+    $('#err').textContent = '';
+    try {
+      state.user = await api('/auth/setup', { method: 'POST', body: { organization: f.organization, username: f.username, name: f.name, email: f.email, password: f.password } });
+      go('#/providers');
     } catch (err) {
       $('#err').textContent = err.message;
       btn.disabled = false;

@@ -12,7 +12,7 @@ const NAV = [
   { label: 'Build', items: [['integrations', 'Integrations', 'plug'], ['workflows', 'Workflows', 'flow'], ['testlab', 'Test Lab', 'flask'], ['credentials', 'Credentials', 'key']] },
   { label: 'Govern', items: [['approvals', 'Approvals', 'check', 'approvals'], ['tools', 'Tool Registry', 'box'], ['versions', 'Version History', 'history'], ['audit', 'Audit log', 'list']] },
   { label: 'Operate', items: [['sources', 'Data Sources', 'db', 'sourcebad'], ['monitoring', 'Monitoring', 'pulse', 'alerts']] },
-  { label: 'Platform', items: [['providers', 'AI Providers', 'cpu'], ['settings', 'Settings', 'cog']] },
+  { label: 'Platform', items: [['providers', 'AI Providers', 'cpu'], ['users', 'Users', 'user', null, 'admin'], ['settings', 'Settings', 'cog']] },
 ];
 
 const ROUTES = {
@@ -29,6 +29,7 @@ const ROUTES = {
   sources: ['./pages/sources.js', 'Data Sources'],
   monitoring: ['./pages/monitoring.js', 'Monitoring'],
   providers: ['./pages/providers.js', 'AI Providers'],
+  users: ['./pages/users.js', 'Users'],
   settings: ['./pages/settings.js', 'Settings'],
 };
 
@@ -44,7 +45,7 @@ function shell() {
   return `<div class="shell" id="shell">
     <aside class="sidebar">
       <a class="brand" href="#/dashboard">${LOGO}<div><b>H.E.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></a>
-      <nav class="nav" id="nav">${NAV.map((g) => `${g.label ? `<div class="nav-label">${g.label}</div>` : ''}${g.items.map(([k, label, ic, cnt]) =>
+      <nav class="nav" id="nav">${NAV.map((g) => `${g.label ? `<div class="nav-label">${g.label}</div>` : ''}${g.items.filter((it) => !it[4] || (it[4] === 'admin' ? isAdmin() : isOwner())).map(([k, label, ic, cnt]) =>
         `<a href="#/${k}" data-nav="${k}">${icon(ic)}<span>${label}</span>${cnt ? `<span class="count warn" data-count="${cnt}" hidden></span>` : ''}</a>`).join('')}`).join('')}</nav>
       <div class="side-status"><a href="#/providers"><span class="dot on" id="ai-dot"></span><div class="ss-text"><b>AI gateway</b><small id="ai-route">checking…</small></div></a></div>
       <div class="side-foot">

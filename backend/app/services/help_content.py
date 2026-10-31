@@ -12,7 +12,7 @@ CONCEPTS = [
     {"term": "Common format", "text": "Three shapes every source lands in. Event/alert: event_id, timestamp, category, action, actor, target, outcome, severity, message. User: id, name, email, status, last_login. Device: id, hostname, ip, os, owner, last_seen. Every record also keeps source and fetched_at plus the original raw record."},
     {"term": "Incremental sync (high-water mark)", "text": "After each run the newest event timestamp is saved. The next run asks the API only for newer data. 'Re-read full history' clears it; de-duplication keeps events unique."},
     {"term": "Rejected records (dead letters)", "text": "Records that cannot be mapped (missing timestamp, bad IP, ...) are parked with the reason instead of failing the run. Fix the mapping, then reprocess them."},
-    {"term": "Credential", "text": "A secret stored encrypted in the vault and referenced by name. Type env:NAME instead of a value to read it from a server environment variable. Credentials can have an expiry; expired ones are never used."},
+    {"term": "Credential", "text": "A secret stored encrypted in the vault and referenced by name. Type env:NAME instead of a value to read it from a server environment variable (the operator must list NAME in CONNECTION_ENV_VARS). Credentials can have an expiry; expired ones are never used."},
     {"term": "Tool", "text": "An operation of a published integration that people, workflows, the MCP gateway and the AI assistant can run."},
     {"term": "Drift & repair", "text": "If an API changes its response shape, monitoring detects missing fields and the platform proposes a repaired mapping for admin approval."},
     {"term": "AI assistant", "text": "Chat with the AI about anything in the platform. Tag integrations, sources, workflows or credentials with @ so it reads them directly. It can propose actions, but nothing changes until you approve each action; it can look things up on its own."},
@@ -58,7 +58,7 @@ PAGES = {
         "title": "Credentials",
         "summary": "Secrets for external services, stored encrypted. Configurations only reference them by name.",
         "steps": ["Press Connect credential.", "Choose the type that matches the integration (Bearer, API key, Basic, Okta SSWS, OAuth2 client credentials, AWS SigV4).", "Optionally set an expiry date; you are alerted a week before.", "Use Test to verify, Rotate to replace the secret, Revoke to disable."],
-        "options": [{"name": "env:NAME", "text": "Enter env:MY_VAR instead of a secret to read the value from a server environment variable at use time."}, {"name": "Lifetime column", "text": "Days since rotation and expiry; warnings appear when rotation is due or the secret expires soon."}],
+        "options": [{"name": "env:NAME", "text": "Enter env:MY_VAR instead of a secret to read the value from a server environment variable at use time. Only variables listed in the server setting CONNECTION_ENV_VARS are allowed."}, {"name": "Lifetime column", "text": "Days since rotation and expiry; warnings appear when rotation is due or the secret expires soon."}],
         "tips": ["Secrets are never shown again, never sent to an AI model and never written to logs."],
     },
     "approvals": {
@@ -116,6 +116,18 @@ PAGES = {
         "steps": ["Set allowed API destinations and thresholds in Organisation policy.", "Under Alert delivery add a Slack webhook and/or SMTP details, choose the minimum severity and press Send test.", "Invite members and set their roles; create API tokens for MCP clients."],
         "options": [{"name": "Credential rotation days", "text": "How old a secret may get before an alert."}, {"name": "Alert after N failures", "text": "Consecutive failed runs before a source raises an alert."}, {"name": "Minimum severity", "text": "Only alerts at or above this level are sent out."}],
         "tips": ["The Slack webhook and SMTP password are stored in the encrypted vault."],
+    },
+    "users": {
+        "title": "Users",
+        "summary": "Accounts and roles for your organisation (administrators only).",
+        "steps": ["Press Add user, choose a username, email, role and an initial password, and share the password securely.",
+                  "Change a role from the dropdown; Disable removes access immediately (sessions and API tokens stop working).",
+                  "Reset password sets a new password for a user who is locked out."],
+        "options": [{"name": "Builder", "text": "Builds, tests and runs integrations and data sources; submits them for review."},
+                    {"name": "Admin", "text": "Also approves and publishes, manages users, policy and alert delivery."},
+                    {"name": "Owner", "text": "Also configures AI providers and can create or change other owners."}],
+        "tips": ["The first account created at setup is an owner.", "You cannot change your own role or disable yourself, and at least one active owner always remains.",
+                 "Accounts are disabled rather than deleted so the audit log stays complete."],
     },
 }
 

@@ -81,9 +81,17 @@ def save_settings(body: NotificationsIn, p: Principal = Depends(require_human("a
         old = cfg.get("email") or {}
         new = {"host": e.host.strip(), "port": e.port, "security": e.security, "username": e.username.strip(), "from": e.from_address.strip(),
                "to": e.to, "password_ref": old.get("password_ref")}
-        if e.password:
+        password = e.password or None
+        if notify.is_gmail(new["host"]):
+            if not password and not old.get("password_ref"):
+                raise HTTPException(422, "Gmail needs an app password")
+            try:
+                new, password = notify.normalize_gmail(new, password)
+            except ValueError as err:
+                raise HTTPException(422, str(err))
+        if password:
             vault.delete_secret(db, old.get("password_ref"))
-            new["password_ref"] = vault.store_secret(db, p.org_id, {"password": e.password})
+            new["password_ref"] = vault.store_secret(db, p.org_id, {"password": password})
         cfg["email"] = new
     org.policy = {**(org.policy or {}), "notifications": cfg}
     audit.record(db, p.org_id, p, "settings.notifications", org.name, enabled=body.enabled, min_severity=body.min_severity)
