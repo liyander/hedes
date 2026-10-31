@@ -20,7 +20,7 @@ export async function renderLogin(app) {
   try { setup = (await api('/auth/setup')).needs_setup; } catch (e) { /* server unreachable: show the sign-in form */ }
   if (setup) return renderSetup(app);
   app.innerHTML = card(`
-    <div class="brand">${LOGO}<div><b>H.E.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></div>
+    <div class="brand">${LOGO}<div><b>H.A.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></div>
     <h1>Welcome back</h1>
     <p>Sign in to build, approve and run integrations.</p>
     <form id="login">
@@ -52,8 +52,8 @@ export async function renderLogin(app) {
 // First run: no account exists yet. The first person creates the organisation and its administrator (owner).
 function renderSetup(app) {
   app.innerHTML = card(`
-    <div class="brand">${LOGO}<div><b>H.E.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></div>
-    <h1>Set up H.E.D.E.S</h1>
+    <div class="brand">${LOGO}<div><b>H.A.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></div>
+    <h1>Set up H.A.D.E.S</h1>
     <p>No accounts exist yet. Create the administrator account. It has full control, including AI providers and user management;
       everyone else is added by an administrator afterwards.</p>
     <form id="setup">
@@ -86,7 +86,7 @@ function renderSetup(app) {
 
 export function renderInvite(app, token) {
   app.innerHTML = card(`
-    <div class="brand">${LOGO}<div><b>H.E.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></div>
+    <div class="brand">${LOGO}<div><b>H.A.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></div>
     <h1>Join your team</h1>
     <p>Choose a username and password to accept the invitation.</p>
     <form id="inv">

@@ -1,6 +1,6 @@
 """Sign in with a provider ("Continue with Google"): the OAuth 2.0 authorization-code flow with PKCE.
 
-An administrator registers an OAuth app at the provider once (Settings > Sign-in providers) and gives H.E.D.E.S its
+An administrator registers an OAuth app at the provider once (Settings > Sign-in providers) and gives H.A.D.E.S its
 client ID and secret. Anyone may then press "Continue with Google": they are redirected to the provider, approve
 read access, and come back with a connection whose tokens live in the vault. Access tokens are refreshed before they
 expire. The scopes asked for are those of the provider's data-source templates, so one sign-in can import them all.

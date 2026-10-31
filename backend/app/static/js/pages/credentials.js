@@ -5,7 +5,7 @@ const AUTH_LABEL = { bearer: 'Bearer token', api_key_header: 'API key (header)',
   ssws: 'Okta API token (SSWS)', oauth2_client_credentials: 'OAuth2 client credentials', aws_sigv4: 'AWS access key (SigV4)' };
 // Created only by signing in with the provider, never typed into the form.
 const SIGNED_IN = 'oauth2_authorization_code';
-const typeLabel = (t) => AUTH_LABEL[t] || (t === SIGNED_IN ? 'Signed in with provider' : t);
+export const typeLabel = (t) => AUTH_LABEL[t] || (t === SIGNED_IN ? 'Signed in with provider' : t);
 
 function secretFields(auth) {
   if (auth === 'basic') return `<div class="grid-2"><div class="field"><label>Username / email</label><input type="text" name="username" autocomplete="off" required></div>
@@ -21,11 +21,15 @@ function secretFields(auth) {
 
 // Secure credential form. The secret is posted straight to the vault endpoint and is never echoed back.
 export async function connectModal({ name = '', auth_type = 'bearer', header = '', rotateId = null } = {}) {
+  if (auth_type === SIGNED_IN) return signInModal(name);
   const fixed = Boolean(name);
   const body = `<p class="small muted" style="margin-top:0">${icon('shield', 14)} Encrypted in the credential vault. Only the execution engine reads it at run time; it is never shown again or sent to any AI model.</p>
     <div class="grid-2">
       <div class="field"><label>Connection name</label><input type="text" name="name" value="${esc(name)}" ${fixed || rotateId ? 'readonly' : ''} pattern="[a-z0-9][a-z0-9_\\-]{0,63}" required><div class="hint">Configurations reference it as <code>credential_ref</code>.</div></div>
-      <div class="field"><label>Type</label><select name="auth_type" ${fixed || rotateId ? 'disabled' : ''}>${Object.entries(AUTH_LABEL).map(([k, v]) => `<option value="${k}" ${k === auth_type ? 'selected' : ''}>${v}</option>`).join('')}</select>${header ? `<div class="hint">Sent as header <code>${esc(header)}</code></div>` : ''}</div>
+      <div class="field"><label>Type</label>${fixed || rotateId
+        // the integration decides the type: show it plainly rather than as a dropdown that cannot be opened
+        ? `<input type="text" value="${esc(typeLabel(auth_type))}" readonly><input type="hidden" name="auth_type" value="${esc(auth_type)}"><div class="hint">Set by the integration.${header ? ` Sent as header <code>${esc(header)}</code>.` : ''}</div>`
+        : `<select name="auth_type">${Object.entries(AUTH_LABEL).map(([k, v]) => `<option value="${k}" ${k === auth_type ? 'selected' : ''}>${v}</option>`).join('')}</select>`}</div>
     </div>
     <div id="secret">${secretFields(auth_type)}</div>
     <div class="hint" style="margin:-6px 0 12px">${icon('key', 12)} Prefer not to store the secret here? Type <code>env:MY_VARIABLE</code> in the field and the server reads that environment variable each time it is used.</div>
@@ -36,7 +40,7 @@ export async function connectModal({ name = '', auth_type = 'bearer', header = '
     title: rotateId ? 'Rotate secret' : 'Connect credential', body,
     onOpen: (root) => {
       const sel = root.querySelector('select[name=auth_type]');
-      sel.addEventListener('change', () => { root.querySelector('#secret').innerHTML = secretFields(sel.value); });
+      sel?.addEventListener('change', () => { root.querySelector('#secret').innerHTML = secretFields(sel.value); });
     },
     actions: [{ label: 'Cancel', value: null }, {
       label: rotateId ? 'Save new secret' : 'Save connection', cls: 'primary', handler: async (root) => {
@@ -52,6 +56,26 @@ export async function connectModal({ name = '', auth_type = 'bearer', header = '
         return res;
       },
     }],
+  });
+}
+
+// A credential of a "Continue with <provider>" integration: nothing to paste, the person signs in with the provider.
+async function signInModal(name) {
+  const providers = await api('/oauth/providers').catch(() => []);
+  const pr = providers.find((x) => x.id === name);
+  const label = pr?.label || name;
+  const body = !pr ? `<p style="margin-top:0">This credential is connected by signing in with a provider, but no sign-in provider called <code>${esc(name)}</code> exists.</p>`
+    : `<p class="small muted" style="margin-top:0">${icon('shield', 14)} Nothing to paste: you sign in with ${esc(label)} and approve read access. The tokens go straight to the vault and are refreshed automatically.</p>
+      ${pr.connection ? `<p class="small">Currently connected as <b>${esc(pr.connection.account || label)}</b> (${esc(pr.connection.status)}). Signing in again replaces it.</p>` : ''}
+      ${pr.configured ? '' : `<div class="callout warn small">${esc(label)} sign-in is not set up yet. ${isAdmin() ? 'Add the OAuth app in <a class="link" href="#/settings">Settings → Sign-in providers</a> first.' : 'Ask an administrator to add it in Settings → Sign-in providers.'}</div>`}`;
+  return modal({
+    title: `Connect ${label}`, body,
+    actions: [{ label: 'Cancel', value: null }, ...(pr?.configured ? [{
+      label: `Continue with ${label.split(' ')[0]}`, cls: 'primary', handler: async () => {
+        try { await signIn(pr.id); } catch (err) { toast(err.message, 'bad'); return false; }
+        return true;
+      },
+    }] : [])],
   });
 }
 

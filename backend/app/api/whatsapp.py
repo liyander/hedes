@@ -188,7 +188,7 @@ def send_test(p: Principal = Depends(require_human("admin")), db: Session = Depe
     org = _org(db, p)
     try:
         token = whatsapp.issue_link(db, p.org_id, p.id, None)
-        whatsapp.send_alert(db, org, rec.phone, "H.E.D.E.S test", "If you can read this, WhatsApp alerts work. Tap the link to check fix links open.", token)
+        whatsapp.send_alert(db, org, rec.phone, "H.A.D.E.S test", "If you can read this, WhatsApp alerts work. Tap the link to check fix links open.", token)
     except whatsapp.WhatsAppError as e:
         db.rollback()
         raise HTTPException(502, str(e))

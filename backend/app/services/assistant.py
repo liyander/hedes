@@ -1,4 +1,4 @@
-"""The platform assistant: answers questions about H.E.D.E.S and the user's own integrations, and can propose actions.
+"""The platform assistant: answers questions about H.A.D.E.S and the user's own integrations, and can propose actions.
 
 Safety model (enforced here, not in the prompt):
 * Read-only lookups run automatically - they are how the assistant "looks into" a tagged integration or source.
@@ -77,7 +77,7 @@ TOOLS: dict[str, tuple[bool, str, tuple, str]] = {
                         "active if it still validates). args: workflow_id, steps ({<step id>: {inputs: {<name>: value} merged into the step's "
                         "inputs, label}}), trigger (fields replacing the trigger's: type, event, conditions, interval_minutes), name. "
                         "Look at it first with get_workflow and use its step ids."),
-    "set_alert_channel": (True, "admin", ("channel",), "Post every H.E.D.E.S alert (failed runs, self-healing reports, credential and "
+    "set_alert_channel": (True, "admin", ("channel",), "Post every H.A.D.E.S alert (failed runs, self-healing reports, credential and "
                           "approval alerts) to an EXISTING Slack channel through the connected Slack app (nothing is created). args: channel (channel ID like C0123ABCD; "
                           "'' turns it off)."),
     "run_workflow": (True, "user", ("workflow_id",), "Run a workflow now with its sample trigger payload (works for drafts too). args: workflow_id, "
@@ -103,7 +103,7 @@ RESPONSE_SCHEMA = {
     },
 }
 
-SYSTEM = """You are the assistant built into H.E.D.E.S (Hybrid Automated Data Exchange System), a config-driven platform that connects
+SYSTEM = """You are the assistant built into H.A.D.E.S (Hybrid Automated Data Exchange System), a config-driven platform that connects
 data sources (Okta, GitHub, Jira, NVD, AbuseIPDB, CISA KEV, any REST API) by configuration and maps them into one common format.
 You explain the platform, help users build and troubleshoot integrations and sources, and perform actions for them - always with their approval.
 
@@ -116,7 +116,7 @@ How you work:
 - Propose an action only once you have every value it needs (list_tools shows each tool's required inputs). If a value is
   missing or ambiguous - a channel, project, repository, recipient, schedule - ask the user for it, say how to find it, and wait.
   Never fill required inputs with placeholders or invented values such as "Hello from workflow!".
-- Workflows start manually, from a webhook, on a schedule, or automatically on a H.E.D.E.S event with optional conditions:
+- Workflows start manually, from a webhook, on a schedule, or automatically on a H.A.D.E.S event with optional conditions:
   failure (fields: source tool|data_source|workflow, tool, integration, error_class, http_status, error, workflow, link),
   alert (kind, severity, message, link) or record (a new data-source event: source, title, severity, category, event_type,
   timestamp, description). "Send every failure to Slack" is an automatic workflow on failure whose step posts ${trigger.error};

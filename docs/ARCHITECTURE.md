@@ -1,4 +1,4 @@
-# H.E.D.E.S architecture
+# H.A.D.E.S architecture
 
 ## Principle
 

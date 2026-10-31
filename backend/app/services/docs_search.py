@@ -42,7 +42,7 @@ def _get(url: str, limit: int) -> bytes:
             raise DocsError(f"Blocked by the network policy: {e}")
         try:
             with httpx.stream("GET", url, timeout=30, follow_redirects=False,
-                              headers={"Accept": "application/json, application/yaml, text/yaml, */*", "User-Agent": "HEDES-docs-fetcher"}) as r:
+                              headers={"Accept": "application/json, application/yaml, text/yaml, */*", "User-Agent": "HADES-docs-fetcher"}) as r:
                 if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
                     url = urljoin(url, r.headers["location"])
                     continue

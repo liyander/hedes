@@ -604,7 +604,7 @@ def _explain(db: Session, case: HealingCase) -> tuple[str, str]:
                           f"Endpoint: {case.endpoint.get('method', '')} {case.endpoint.get('url', '')}",
                           f"Evidence: {case.evidence}", f"Root cause (rules): {case.root_cause}",
                           "Attempts: " + "; ".join(f"{a['action']} -> {a['result']}" for a in case.attempts or [])])
-    system = ("You are the H.E.D.E.S self-healing analyst. In at most 4 sentences, explain the most likely root cause of this failure "
+    system = ("You are the H.A.D.E.S self-healing analyst. In at most 4 sentences, explain the most likely root cause of this failure "
               "and why the attempted fixes did or did not work. Be specific; do not invent facts beyond the evidence.")
     try:
         res = Gateway(db, case.organization_id).text("error_explanation", system, [{"role": "user", "content": evidence}],

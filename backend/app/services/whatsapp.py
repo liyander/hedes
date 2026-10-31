@@ -221,14 +221,14 @@ def send_alert(db: Session, org: Organization, phone: str, title: str, body: str
             components.append({"type": "button", "sub_type": "url", "index": "0", "parameters": [{"type": "text", "text": raw_token}]})
         return _post(db, org, {"to": phone, "type": "template", "template": {
             "name": cfg["alert_template"], "language": {"code": cfg.get("template_lang") or "en"}, "components": components}})
-    text = f"*{title}*\n{body}\n\nFix it: {url}\n(link valid {LINK_HOURS} h, opens H.E.D.E.S)"
+    text = f"*{title}*\n{body}\n\nFix it: {url}\n(link valid {LINK_HOURS} h, opens H.A.D.E.S)"
     return _post(db, org, {"to": phone, "type": "text", "text": {"preview_url": False, "body": text[:4000]}})
 
 
 def send_code(db: Session, org: Organization, phone: str, code: str) -> str:
     """Returns how it was sent: 'template' (always delivered) or 'text' (only within 24 h of the person messaging the business number)."""
     cfg = config_of(org)
-    text = f"Your H.E.D.E.S verification code is {code}. It expires in {CODE_MINUTES} minutes. If you did not ask for it, ignore this message."
+    text = f"Your H.A.D.E.S verification code is {code}. It expires in {CODE_MINUTES} minutes. If you did not ask for it, ignore this message."
     if cfg.get("otp_template"):
         # Meta "authentication" templates: the code goes in the body and in the copy-code button.
         _post(db, org, {"to": phone, "type": "template", "template": {
@@ -237,7 +237,7 @@ def send_code(db: Session, org: Organization, phone: str, code: str) -> str:
                            {"type": "button", "sub_type": "url", "index": "0", "parameters": [{"type": "text", "text": code}]}]}})
         return "template"
     if cfg.get("alert_template"):
-        send_alert(db, org, phone, "H.E.D.E.S verification code", text, "settings")
+        send_alert(db, org, phone, "H.A.D.E.S verification code", text, "settings")
         return "template"
     _post(db, org, {"to": phone, "type": "text", "text": {"preview_url": False, "body": text}})
     return "text"
@@ -333,7 +333,7 @@ def deliver(db: Session, org: Organization, alert: dict) -> dict[str, str]:
     if not cfg.get("enabled") or not configured(cfg):
         return {}
     results = {}
-    title = f"H.E.D.E.S {alert['severity'].upper()}: {alert['kind']}"
+    title = f"H.A.D.E.S {alert['severity'].upper()}: {alert['kind']}"
     for rec in _targets(db, org.id, alert):
         try:
             send_alert(db, org, rec.phone, title, alert["message"], issue_link(db, org.id, rec.user_id, alert))

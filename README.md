@@ -1,158 +1,420 @@
-# H.E.D.E.S
+<div align="center">
 
-AI-assisted, configuration-driven, zero-code integration platform. Users describe an integration in plain
-language; AI agents read the API's documentation and produce a declarative configuration; deterministic code
-validates, security-checks and tests it; an administrator approves the exact version; a generic engine runs it.
-Monitoring detects failures and drift and prepares repairs, which go back through review.
+<img src="backend/app/static/favicon.svg" width="88" height="88" alt="H.A.D.E.S logo">
 
+# H.A.D.E.S
+
+### Hybrid Automated Data Exchange System
+
+**Describe an integration in plain English. The AI builds it, a human approves it, and the platform runs it, heals it,
+and lets you manage it from Slack and WhatsApp.**
+
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Neon-4169E1?logo=postgresql&logoColor=white)
+![Zoho Catalyst](https://img.shields.io/badge/Deployed%20on-Zoho%20Catalyst-E42527)
+![Slack](https://img.shields.io/badge/Slack-AI%20bot-4A154B?logo=slack&logoColor=white)
+![WhatsApp](https://img.shields.io/badge/WhatsApp-alerts%20%2B%20chatbot-25D366?logo=whatsapp&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-gateway-111111)
+![Tests](https://img.shields.io/badge/tests-192%20passing-2ea44f)
+
+**[Live deployment](https://hedes-50047328087.development.catalystappsail.in)** ·
+[User guide](docs/USER_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md)
+
+<img src="docs/screenshots/02-dashboard.png" alt="H.A.D.E.S dashboard" width="100%">
+
+</div>
+
+---
+
+## The problem
+
+Every team connects dozens of SaaS APIs: identity providers, ticketing, code hosting, security feeds, chat. Today that
+means one of two things: wait for an automation tool to ship a connector, or write and maintain glue code. When an API
+changes or a token expires, someone finds out days later from a broken dashboard.
+
+AI can write that glue in seconds, but letting an LLM push code that calls production APIs with your credentials is not
+something a security team will accept.
+
+## The H.A.D.E.S answer
+
+**AI plans, deterministic code executes, humans approve.**
+
+- The AI reads the API's documentation and produces a **declarative configuration**, not code.
+- A generic engine validates, security-reviews and **tests it against mocked responses**.
+- An administrator approves **the exact version**; the approval is bound to the configuration's hash.
+- Once live, every failure is **traced to its root cause and fixed automatically** where that's safe. Otherwise
+  an admin gets an email, a Slack message or a WhatsApp message saying exactly what's needed.
+- You can run all of it **from Slack or WhatsApp**: ask why something failed, have the AI fix it, and approve the fix
+  with one button, without opening the app.
+
+---
+
+## What makes H.A.D.E.S different
+
+| | Feature | What it means for you |
+|---|---|---|
+| <img src="docs/icons/slack.png" width="20" height="20" alt=""><img src="docs/icons/whatsapp.png" width="20" height="20" alt=""> | **Manage it from Slack and WhatsApp** | Reply under a failure alert in Slack ("why did this fail?") and the AI investigates. It can change a workflow, run it or open an investigation, and the change runs only after you press **Approve** in Slack. WhatsApp alerts carry one-tap fix links, and a WhatsApp chatbot browses and acts on the platform. |
+| <img src="docs/icons/spark.svg" width="20" height="20" alt=""> | **AI-built connectors, no code** | Describe the integration or paste an OpenAPI spec. The AI drafts a declarative config that the engine runs. No connector code, nothing to deploy. |
+| <img src="docs/icons/shield.svg" width="20" height="20" alt=""> | **The AI can never act alone** | Every action the AI proposes waits for a human's approval. It can never approve or publish integrations, never sees secrets, and approval is bound to a SHA-256 hash of the exact config. |
+| <img src="docs/icons/wrench.svg" width="20" height="20" alt=""> | **Self-healing with a root cause** | Failures are investigated automatically: the AI collects evidence, finds the root cause, tries safe fixes (re-probe, re-test, corrected endpoint) and re-tests. What it can't fix goes to admins with *root cause, what was tried, what's still failing, what's needed*. |
+| <img src="docs/icons/flow.svg" width="20" height="20" alt=""> | **Workflows that start themselves** | Besides manual, webhook and schedule triggers, a workflow can start **automatically** on a failure, an alert or a new data-source record, with conditions. It also guards against runaway loops. |
+| <img src="docs/icons/key.svg" width="20" height="20" alt=""> | **"Continue with Google", then import everything** | Sign in with Google, Microsoft, GitHub or Atlassian (OAuth 2.0 + PKCE). One sign-in asks for the scopes of every data source that provider offers, then imports them all. Tokens are vaulted and auto-refreshed. |
+| <img src="docs/icons/flask.svg" width="20" height="20" alt=""> | **Tested before it touches a live API** | Schema-derived safe tests run every operation against a mocked transport, including expired-credential and error-path cases, before review. |
+| <img src="docs/icons/agent.svg" width="20" height="20" alt=""> | **MCP gateway for AI agents** | Admin-approved tools are exposed to any MCP client (Claude, IDE agents) with role-based access. Agent tokens can run tools but can never govern. |
+| <img src="docs/icons/cpu.svg" width="20" height="20" alt=""> | **Bring any AI model** | 13+ providers (Amazon Bedrock, Gemini, OpenAI, Anthropic, Groq, NVIDIA NIM, xAI, Mistral, DeepSeek, Ollama…) or any OpenAI-compatible endpoint, routed per task with fallbacks, budgets and confidentiality rules. A built-in offline model keeps the core pipeline working without any key. |
+
+### How it compares
+
+| Capability | Typical workflow automation tools | **H.A.D.E.S** |
+|---|---|---|
+| New API without a ready-made connector | Usually a generic HTTP step you configure by hand, or custom code | AI reads the docs and drafts a validated, tested connector |
+| AI in the loop | Usually suggests steps that you then build | Builds, explains, fixes and runs things, **always behind human approval** |
+| What gets approved | Usually a workflow, by its author | The **exact config hash**, by an administrator, with a security review |
+| When an API changes or a token expires | A run fails and someone notices | Failure classified, root cause found, fix tried or repair proposed, admin told what's needed |
+| Running it from chat | Usually notifications only | Two-way: ask the AI, approve changes and run workflows from Slack; alerts with fix links and a chatbot on WhatsApp |
+| Data that arrives | Each app's own format | Normalised into one common event/user/device format with de-duplication and a dead-letter queue |
+| Exposing tools to AI agents | Usually not available | Built-in MCP gateway with per-tool roles |
+
+---
+
+## <img src="docs/icons/slack.png" width="24" height="24" alt="" align="top"> Manage it from Slack
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/25-slack-thread.png" alt="AI answering inside a Slack alert thread"></td>
+<td width="50%"><img src="docs/screenshots/26-slack-approval.png" alt="Approving an AI-proposed workflow fix inside Slack"></td>
+</tr>
+<tr>
+<td><b>Alerts become conversations.</b> A failure posts to <code>#failures</code>. Reply in the thread and the AI reads the
+alert, looks up the failing integration and explains the root cause and the fix. Here: the Google sign-in lacked the
+Admin Reports scope.</td>
+<td><b>Fix it without leaving Slack.</b> "Fix this using owner liyander and repo hedes": the AI proposes the change and
+H.A.D.E.S posts <b>Approve / Reject</b> buttons. Only the person who asked can approve. Then it runs and reports back.</td>
+</tr>
+</table>
+
+- **Everything the in-app assistant can do:** questions, failures, self-healing cases, creating, changing, activating and
+  running workflows, running tools.
+- **Approval first:** the AI asks for missing details before it offers an Approve button, so you never approve something
+  half-specified.
+- **Your identity and role:** Slack users are linked to H.A.D.E.S accounts with a one-time code, and every action runs
+  with that person's own role. Unlinked or demoted users are refused.
+- **Socket Mode:** H.A.D.E.S connects out to Slack, so no public webhook URL is needed. If the bot and app tokens come
+  from different Slack apps, it says so.
+- **Failure alerts:** a dedicated alert channel, and channel mentions are shown as their real names.
+
+<img src="docs/screenshots/19-settings-slack.png" alt="Slack settings" width="100%">
+
+## <img src="docs/icons/whatsapp.png" width="24" height="24" alt="" align="top"> WhatsApp alerts with one-tap fixes and a chatbot
+
+<img src="docs/screenshots/20-settings-whatsapp.png" alt="WhatsApp settings" width="100%">
+
+- **Personal alerts:** each admin verifies their own number with a 6-digit code and chooses a minimum severity.
+- **One-tap fix links:** each alert opens a Fix page offering only the actions that apply. **Approve fix & publish**,
+  **Retry now**, **Pause / Resume**, **Reconnect credential**, **Acknowledge**, **Mute 1 h / 24 h**. All run signed in as
+  you, and are audited.
+- **Chatbot:** message the business number to browse integrations, data sources, alerts, approvals and workflows,
+  approve or reject with a confirm step, or ask the AI anything.
+
+---
+
+## <img src="docs/icons/spark.svg" width="24" height="24" alt="" align="top"> AI Studio: build by describing
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/13-assistant.png" alt="AI assistant answering from live data"></td>
+<td width="50%"><img src="docs/screenshots/03-ai-studio.png" alt="AI Studio"></td>
+</tr>
+</table>
+
+- **The assistant knows your platform.** It runs read-only lookups itself (shown as "looked up …"). Type `@` to tag an
+  integration, source, workflow or credential, and it reads that item's configuration, health and recent errors, never
+  its secrets.
+- **Actions are cards.** Anything that changes data or calls an API appears as an approval card with the exact inputs,
+  and runs with your permissions.
+- **Build an integration:** a persisted pipeline goes *requirements → API discovery → config generation → validation →
+  security review → safe tests → submit for approval*. It looks up official documentation online, tells you how to find
+  each value it needs, lists its sources, and asks before creating anything.
+
+## <img src="docs/icons/plug.svg" width="24" height="24" alt="" align="top"> Integrations that explain themselves
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/05-integration-guide.png" alt="Integration with setup guide"></td>
+<td width="50%"><img src="docs/screenshots/06-safe-tests.png" alt="Safe tests 6/6 passed"></td>
+</tr>
+</table>
+
+- **Setup guide:** every integration shows its own seven-step guide, from describe to running, with the state of each
+  step.
+- **Safe tests:** each operation is tested against a mocked transport: the happy path built from its field mapping, and
+  expired-credential classification. Every test shows the exact request it would make.
+- **Generic engine, no per-service code:**
+  - **8 auth types:** bearer, API key in a header or query, basic, Okta SSWS, OAuth2 client credentials,
+    **OAuth2 sign-in**, AWS SigV4.
+  - **Pagination:** page, cursor, offset, `Link` header, next-page URL in the body.
+  - **Requests:** retries with backoff and `Retry-After`, rate caps, response-success rules.
+
+<img src="docs/screenshots/04-integrations.png" alt="Integrations list" width="100%">
+
+## <img src="docs/icons/flow.svg" width="24" height="24" alt="" align="top"> Workflows: manual, webhook, schedule, or automatic
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/08-automatic-workflow.png" alt="Automatic workflow triggered on failures"></td>
+<td width="50%"><img src="docs/screenshots/08b-workflow-steps.png" alt="Workflow step editor"></td>
+</tr>
+</table>
+
+- **Visual editor:** a DAG with parallel layers, per-step conditions and `${steps.x.output.y}` references, plus dry runs
+  that show every request without sending it.
+- **Automatic triggers:** *a tool call, data-source run or workflow run fails*, *H.A.D.E.S raises an alert*, or *a data
+  source stores a new record*, each with optional conditions such as `${trigger.severity} eq critical`.
+- **Loop-safe:** a failure caused by an automatic run never starts another one, the same event starts a workflow at most
+  once every 5 minutes, and bursts are capped.
+- **Signed webhooks:** HMAC signature, timestamp window and replay protection.
+
+## <img src="docs/icons/wrench.svg" width="24" height="24" alt="" align="top"> Self-healing that tells you the root cause
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/11b-healing-fixed.png" alt="A self-healed failure with full log"></td>
+<td width="50%"><img src="docs/screenshots/11c-healing-needs-admin.png" alt="A case that needs an admin"></td>
+</tr>
+</table>
+
+Every failure opens a case with a timestamped log:
+
+1. failure detected;
+2. evidence collected;
+3. root cause;
+4. AI analysis (with the model it used);
+5. each fix attempted and its result;
+6. outcome and notifications.
+
+Safe fixes are applied automatically: correcting a wrong endpoint against the reference configuration, re-testing a
+credential, re-probing a recovered service. Fixes that change behaviour become a **revision awaiting approval**. Secrets
+are never changed by the AI; the case says exactly what a person must do.
+
+<img src="docs/screenshots/11-self-healing.png" alt="Self-healing sessions" width="100%">
+
+## <img src="docs/icons/pulse.svg" width="24" height="24" alt="" align="top"> Monitoring and data sources
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/10-monitoring.png" alt="Monitoring"></td>
+<td width="50%"><img src="docs/screenshots/09-data-sources.png" alt="Data sources"></td>
+</tr>
+</table>
+
+- **Monitoring:** success rate, p50/p95 latency and executions per hour. Failures are classified (`auth_invalid`,
+  `forbidden`, `not_found`, `rate_limited`, `response_drift`…), each with a plain-language meaning and next step.
+- **Data sources:** pull on an interval or cron schedule and map into **one common format** (event, user, device):
+  - incremental sync from a high-water mark, de-duplication, upsert of users and devices;
+  - a dead-letter queue for rejected records;
+  - health per connection.
+
+| Source template | Data | Sign-in |
+|---|---|---|
+| <img src="docs/icons/google.png" width="18" height="18" alt=""> **Google Workspace** | users, sign-in activity, Admin console changes | **Continue with Google** |
+| <img src="docs/icons/microsoft.png" width="18" height="18" alt=""> **Microsoft 365 / Entra ID** | users, sign-in logs, Defender security alerts | **Continue with Microsoft** |
+| <img src="docs/icons/github.png" width="18" height="18" alt=""> **GitHub organisation** | members, Dependabot alerts | **Continue with GitHub** or token |
+| <img src="docs/icons/atlassian.png" width="18" height="18" alt=""> **Jira Cloud** | issues, users (site detected automatically) | **Continue with Atlassian** or API token |
+| <img src="docs/icons/okta.png" width="18" height="18" alt=""> Okta | users, System Log | SSWS token |
+| <img src="docs/icons/nvd.png" width="18" height="18" alt=""> NVD CVE database | vulnerabilities | none / optional key |
+| <img src="docs/icons/cisa.png" width="18" height="18" alt=""> CISA Known Exploited Vulnerabilities | alerts | none |
+| <img src="docs/icons/abuseipdb.png" width="18" height="18" alt=""> AbuseIPDB | IP blacklist | API key |
+
+Adding another source means writing one YAML file in `examples/sources/`, or asking the AI to draft one.
+
+## <img src="docs/icons/key.svg" width="24" height="24" alt="" align="top"> Credentials and "Continue with …"
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/12-credentials.png" alt="Credentials and sign-in providers"></td>
+<td width="50%"><img src="docs/screenshots/23-sign-in-providers.png" alt="Sign-in provider setup"></td>
+</tr>
+</table>
+
+- **Encrypted vault:** secrets are encrypted with Fernet and referenced by name. Integrations never contain them, and
+  the AI never sees them. `env:NAME` reads a server environment variable instead.
+- **Credential hygiene:** expiry dates, rotation reminders and a Test button.
+- **OAuth sign-in:**
+  - PKCE, with the sign-in bound to the browser that started it, so a link someone else sends can't attach their account
+    to your organisation;
+  - tokens refreshed automatically, once even when several steps run in parallel.
+
+## <img src="docs/icons/shield.svg" width="24" height="24" alt="" align="top"> Governance built in
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/07-approvals.png" alt="Approvals"></td>
+<td width="50%"><img src="docs/screenshots/17-version-history.png" alt="Version history"></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/16-tool-registry.png" alt="Tool registry with MCP exposure"></td>
+<td width="50%"><img src="docs/screenshots/18-audit-log.png" alt="Audit log"></td>
+</tr>
+</table>
+
+- **Approvals:**
+  - immutable submitted versions, approved against their config hash;
+  - credential and test gates;
+  - self-approval flagged;
+  - one-click rollback to any previously approved hash.
+- **Tool registry:** per-tool role allow-lists and MCP exposure toggles.
+- **Audit log:** every action by every person, the AI, workflows, MCP agents and Slack/WhatsApp.
+- **Roles:** builder, admin, owner. API tokens can never approve, publish or change policy.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/15-ai-providers.png" alt="AI providers and task routing"></td>
+<td width="50%"><img src="docs/screenshots/14-test-lab.png" alt="Test Lab"></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/21-settings-alerts.png" alt="Alert delivery"></td>
+<td width="50%"><img src="docs/screenshots/22-email-templates.png" alt="Email templates per alert kind"></td>
+</tr>
+</table>
+
+---
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph People
+        U[Builder] -->|describes| S[AI Studio]
+        A[Admin] -->|approves exact hash| G
+        SL[Slack / WhatsApp] <-->|ask, approve, fix| AS
+    end
+    subgraph AI["AI (proposes only)"]
+        S --> AG[Agents: requirements, discovery, config, security, tests, repair]
+        AS[Assistant + tools]
+    end
+    subgraph Core["Deterministic core (decides and executes)"]
+        AG --> V[Schema + security validation]
+        V --> T[Safe tests on mocked transport]
+        T --> G[Approval gate]
+        G --> E[Generic HTTP engine]
+        E --> M[Monitoring]
+        M --> H[Self-healing]
+        H -->|safe fix / revision| G
+        M --> W[Automatic workflows]
+        E --> D[(Common-format data)]
+    end
+    E <--> X[(External APIs)]
+    VA[(Encrypted vault)] -.credentials.-> E
+    MCP[MCP agents] -->|approved tools only| E
 ```
- AI agents (propose)          Deterministic core (decide & execute)          Humans (govern)
- ─────────────────────        ─────────────────────────────────────          ───────────────
- requirements                 JSON-Schema + semantic validation              admin approval bound
- API discovery         ──▶    security policy + SSRF egress checks    ──▶    to the config hash
- config generation            mock-transport tests                           roles per tool, MCP
- security narrative           generic HTTP engine (no service code)          exposure, rollback
- repair / workflow plans      vault-held credentials, audit log
-```
+
+| Layer | Responsibility |
+|---|---|
+| **AI** | Proposes: requirements, API discovery, config generation, security narrative, tests, repairs, workflow plans, explanations |
+| **Deterministic core** | Decides and executes: JSON-Schema + semantic validation, SSRF/egress checks, mocked tests, approval gate, generic engine, vault |
+| **People** | Govern: approve exact versions, approve every AI action, roll back, set policy |
+
+## Security model
+
+| Control | How |
+|---|---|
+| AI isolation | The AI produces config and proposals only. It cannot execute changes, approve, publish, see secrets or change policy |
+| Approval integrity | Approval is bound to the SHA-256 of the exact configuration; submitted versions are immutable |
+| Secrets | Fernet-encrypted vault, referenced by name. Redacted from previews, logs and AI context |
+| SSRF / egress | Scheme and host checks, private, link-local and metadata IPs blocked after DNS resolution, no redirects, optional domain allow-list |
+| Injection | Restricted `${inputs.x}` templates and a JSONPath subset, no `eval`; documents shown to the AI are wrapped as untrusted |
+| Sessions | bcrypt passwords, HttpOnly JWT cookie (`SameSite=Strict`), mandatory CSRF header, RBAC |
+| OAuth | PKCE, one-time state bound to the browser by a nonce cookie, tokens vaulted and refreshed |
+| Webhooks | HMAC-SHA256 signatures, 5-minute timestamp window, replay protection |
+| Chat channels | Slack and WhatsApp users linked to accounts by one-time codes; actions run with that person's role, and only the requester can approve |
+
+---
 
 ## Quick start
 
-**Windows:** double-click `run.bat` (or `run.bat 9000` for another port, `run.bat test` to run the tests). On first run it
-creates `backend\.venv`, installs dependencies, copies `.env.example` to `.env`, starts the server and opens the browser.
-Python 3.10+ is the only prerequisite. The launcher always starts in **real-data mode** (no mock APIs or sample data).
-Other modes: `run.bat demo` (turns the bundled mocks on, for demos only) and `run.bat reset` (moves the database to a
-timestamped backup so you start empty - use it once if your database was created by an earlier demo-mode build).
-To remove only the demo/mock data and keep accounts, settings, AI providers and your own work, run
-`cd backend && python -m app.maintenance purge-demo` (it backs up the database first).
+**Windows:** double-click `run.bat`. It creates a virtual environment, installs dependencies, creates `.env`, starts the
+server and opens the browser. The first account you create becomes the administrator.
+`run.bat demo` turns on bundled mock APIs for a demo, `run.bat test` runs the tests and `run.bat reset` starts afresh
+with a backup.
 
 **Manually:**
 
 ```bash
 cd backend
 pip install -r requirements.txt
-SEED_PASSWORD=IntegraDemo2026 uvicorn app.main:app --port 8000      # PowerShell: $env:SEED_PASSWORD="IntegraDemo2026"; uvicorn ...
+uvicorn app.main:app --port 8000
 ```
 
-Open http://127.0.0.1:8000. Three accounts are seeded (same password): **builder** (user), **admin**, **owner**
-(platform owner). Without `SEED_PASSWORD` a random password is generated and written to `backend/data/seed-credentials.txt`.
+Open http://127.0.0.1:8000. Add an AI provider under **AI Providers**: Gemini, OpenAI, Anthropic, Bedrock, Groq, NVIDIA
+NIM, Ollama or any OpenAI-compatible URL. Interactive API docs are at `/docs`.
 
-With Docker (PostgreSQL): `cp .env.example .env && docker compose up --build`.
+**Docker (PostgreSQL):** `cp .env.example .env && docker compose up --build`
 
-The **AI assistant** (chat, `@` tagging, approval-gated actions) and the integration builder need a real model. In
-**AI Providers** (owner) pick **Amazon Bedrock** (region + AWS access keys or a Bedrock API key + model/inference-profile id),
-NVIDIA NIM, Groq, xAI Grok, Gemini, OpenAI, Anthropic, OpenRouter, Together, Mistral, DeepSeek, Ollama, LM Studio or any
-OpenAI-compatible URL from a form (credentials are stored encrypted, or `env:NAME`). Or set `BEDROCK_MODEL_ID` + AWS keys
-in `.env` to register Bedrock on first start.
-The guided *Build an integration* pipeline still falls back to a deterministic offline model so it works without a key.
+### Deploy
 
-The product runs against **real services only**. The bundled mock APIs, sample integrations and demo buttons exist
-only when `DEMO_MODE=true` (used by the test suite and the demo script below).
+| Target | How |
+|---|---|
+| **Zoho Catalyst AppSail** (live) | Managed Python 3.12 runtime with dependencies bundled for Linux. Step by step in [`deploy/catalyst`](deploy/catalyst/README.md) |
+| **Neon PostgreSQL** | Set `DATABASE_URL=postgresql://…?sslmode=require`; the driver and pooler settings are handled automatically |
+| **Render** | `render.yaml` blueprint |
+| **Docker** | `Dockerfile` + `docker-compose.yml` |
 
-Tests: `cd backend && python -m pytest tests -q` (unit tests plus an end-to-end run of the demo against a live server).
+Keep `JWT_SECRET` and `SECRET_ENCRYPTION_KEY` the same everywhere a database is shared. The vault key is what decrypts
+stored secrets.
 
-## Config-driven data sources (real APIs)
+## Tech stack
 
-*Integrations → Add data source* sets up a real service from a form. Each template is a YAML file in
-`examples/sources/`; you only supply your domain or organisation and a credential:
+| Part | Choice | Why |
+|---|---|---|
+| API | FastAPI, Pydantic v2, Uvicorn | Typed request validation, async server, automatic OpenAPI docs |
+| Data | SQLAlchemy 2, SQLite (local) / PostgreSQL (Neon) | One codebase, zero-setup locally, managed Postgres in production |
+| Engine | httpx, JSON Schema, restricted templates + JSONPath | Declarative, sandboxed execution with no generated code |
+| Security | cryptography (Fernet), bcrypt, PyJWT | Encrypted vault, password hashing, signed sessions |
+| AI | Own gateway with adapters for OpenAI-compatible, Anthropic, Gemini, Bedrock + an offline model | Task routing, fallbacks, budgets, schema-validated output |
+| Chat | Slack Socket Mode (websockets), Meta WhatsApp Cloud API | Two-way control without exposing a public webhook for Slack |
+| UI | Vanilla JS ES modules, no build step | Fast, dependency-free, strict Content Security Policy |
+| Hosting | Zoho Catalyst AppSail + Neon | Managed runtime and serverless Postgres |
 
-| Template | Data (common format) | Login | Paging |
-| --- | --- | --- | --- |
-| CISA Known Exploited Vulnerabilities | alerts | none | single page (CISA's GitHub mirror) |
-| GitHub organisation security | users, Dependabot alerts | personal access token | `Link` header |
-| Okta | users, System Log events | SSWS API token | `Link` header (cursor) |
-| Jira Cloud | users, issues | email + API token (Basic) | offset (`startAt`) and cursor (`nextPageToken`) |
-| NVD CVE database | alerts | none (optional key) | offset (`startIndex`) |
-| AbuseIPDB blacklist | alerts | API key header | none |
+## Tests
 
-Every source lands in one of three common shapes (event/alert, user, device; each keeps `source`, `fetched_at` and the
-raw record), with per-field transforms, incremental sync, de-duplication, a dead-letter queue, retries with
-backoff/jitter and `Retry-After`, per-connector rate caps, interval **or cron** schedules and a health page.
-Users and devices are upserted; events are append-only. Secrets can be stored in the vault or read from the server's
-environment with `env:NAME` (organisation credentials may only use variables listed in `CONNECTION_ENV_VARS`). Adding another source is writing a YAML file (or asking the assistant to draft one).
+```bash
+cd backend && python -m pytest tests -q      # 192 passed
+```
 
-The CISA feed and the NVD API (no account needed) are verified end to end against the live internet by the test suite; the
-others need your accounts, and are validated and exercised with the engine's request/response tests.
+The suite covers:
 
-Event mappings may use the PRD's Event/Alert names: `id` is stored as `event_id`, `type` as `category` (and as `action` when
-no action is mapped) and `description` as `message`. The events API returns both sets of names.
+- **Engine and security:** every auth type and pagination style, SSRF and egress, validation, the vault.
+- **Pipeline and governance:** the AI pipeline, approvals and rollback, the MCP gateway, data-source ingestion
+  (including live CISA and NVD feeds).
+- **Healing, workflows and sign-in:** self-healing, automatic workflow triggers, OAuth sign-in and token refresh.
+- **Chat channels:** Slack conversations with approval buttons, WhatsApp alerts and fix links.
+- **End to end:** a full run against a live server.
 
-**Alerts** can be pushed to Slack (incoming webhook) and/or email (SMTP) from *Settings → Alert delivery*; a source
-that fails N runs in a row (default 3) raises one. **WhatsApp** (Meta Cloud API) sends alerts to each admin's own verified number
-with a one-tap **fix link**: approve or reject a repair, retry/pause/resume a source, acknowledge or mute, signed in with your own
-account and audited. With the **chatbot** on, admins can also browse integrations, sources, alerts, approvals and
-workflows, act on them, and ask the AI from a chat with the business number (see the User Guide, section 17.1).
+## Project structure
 
-## AI assistant
+```
+backend/app/
+  api/          REST endpoints (auth, integrations, approvals, workflows, oauth, slack, whatsapp, healing, ...)
+  services/     engine, ai_gateway, agents, orchestrator, healing, automation, oauth, slack_bot, whatsapp, vault, ...
+  static/       single-page UI (no build step)
+backend/tests/  192 tests
+shared/         integration.schema.json, workflow.schema.json  (the contract)
+examples/       integration configs and data-source templates (YAML)
+docs/           USER_GUIDE.md, ARCHITECTURE.md, screenshots/
+deploy/catalyst/  Zoho Catalyst AppSail entry point and config example
+```
 
-*AI Studio → Assistant* (and the **Ask AI** button on every page) answers questions about the platform and your own
-configuration. Type `@` to tag an integration, source, workflow or credential; it then reads that item's configuration,
-health and recent errors (never secrets). It runs read-only lookups itself; anything that changes data or calls an
-external API is shown as an **approval card** with the exact inputs and runs only when you approve, with your own
-permissions, audited. It cannot approve or publish integrations, reveal or rotate secrets, or change policy.
-When a credential is needed it shows a **Connect credential** card (prefilled name and type, plus the provider's own
-instructions when a template exists); the secret goes from that form straight to the vault and never reaches the
-model. Provider setup guides come from the vetted templates; for other providers the assistant writes one and labels it
-AI-generated. An admin-only action approved by a user is sent to *Approvals*, where any administrator can run or reject it. Every
-page also has a hideable **Page guide** (usage, options, tips), and each integration shows a step-by-step setup guide.
+## Documentation
 
-## Demo script (≈5 minutes, needs `DEMO_MODE=true`)
+- **[User guide](docs/USER_GUIDE.md):** every page, option and role, explained.
+- **[Architecture](docs/ARCHITECTURE.md):** data model, trust boundaries, configuration format.
 
-1. **builder** → *AI Studio* → “I want to connect another task-management service and create tasks automatically.”
-   The AI asks for documentation.
-2. Click **Use sample TaskFlow API** (an OpenAPI document for a bundled mock service the platform has never seen).
-   Requirements become ready → **Generate integration**. Watch the pipeline: discovery → config → validation →
-   security → safe tests (mocked) → submitted for approval.
-3. **Connect** the credential (`taskflow-demo-token`). It goes to the vault; the AI never sees it.
-4. Sign in as **admin** → *Approvals*. The review shows what the integration can do, the destination, the
-   policy checks, the tests and the configuration hash. **Approve & publish**. (The builder cannot approve; any
-   admin or owner can, including on their own submission - self-approvals are flagged in the audit log.)
-5. *Test Lab* → `taskflow.create_task` → **Preview request** (credentials redacted) → **Execute live**. The task
-   appears in *Settings → Demo controls*. No connector code was added.
-6. Self-healing: *Settings* → **Simulate API change** (TaskFlow renames `assignee.user_name` to
-   `assignee.display_name`). Execute twice → `response_drift` → the repair agent proposes v+0.0.1, regression-tests
-   it against the observed structure and submits it. Approve it in *Approvals* (or reject: the live version stays).
-7. *Workflows* → **Describe with AI**: “When a webhook arrives with priority high, create a TaskFlow task and notify
-   the security-team channel in Notify” → dry run → activate (copy the webhook secret) → send signed webhooks.
-8. *Tool Registry* → tick **MCP** for a tool; *Settings* → create an API token; point an MCP client at `/mcp`.
+## Known limits
 
-## What is implemented
-
-| Area | Where |
-| --- | --- |
-| Integration schema (the contract) | `shared/integration.schema.json`, `shared/workflow.schema.json` |
-| Generic engine: templated path/query/headers/JSON/form bodies, 8 auth types (bearer, API key, basic, Okta SSWS, OAuth2 client credentials with token caching, AWS SigV4), pagination (page, cursor, offset, `Link` header), timeouts, idempotent-only retries with exponential backoff + jitter + `Retry-After`/rate-limit-reset hints, per-connector requests-per-minute cap, 2 MB cap, JSONPath mapping, error classification | `backend/app/services/engine.py` |
-| Data-source ingestion: an operation's `ingest` block maps any API into one common event format (`event_id, timestamp, category, action, actor, target, outcome, severity, message`); incremental pulls from a saved high-water mark, de-duplication, per-record validation with a dead-letter queue, run history, per-connection health, credential expiry/rotation alerts | `services/ingest.py`, `api/sources.py`, UI *Data Sources* |
-| Restricted templates (`${inputs.x}`) and JSONPath subset - no `eval` | `services/templates.py`, `services/jsonpath.py` |
-| SSRF/egress: scheme, private/link-local/metadata IPs (DNS-resolved), no redirects, org domain allow-list | `services/egress.py` |
-| Validation + deterministic security review (inline secrets, forbidden headers, destructive ops, scopes, credential binding) | `services/validation.py`, `services/security_review.py` |
-| AI gateway: adapters (OpenAI-compatible, Anthropic, Gemini, offline), task routing by purpose/JSON/context/confidentiality, budgets, fallback, schema-validated output with one self-correction, usage + cost, secret redaction, untrusted-document wrapping | `services/ai_gateway.py` |
-| Agents: requirements, discovery, architect/config, security narrative, tests, repair, workflow planning, error explanation | `services/agents.py` |
-| Persisted pipeline state machine with per-stage retry | `services/orchestrator.py` |
-| Lifecycle: immutable submitted versions, hash-bound approval by any administrator (self-approval audited), credential + test gates, publish, disable, rollback to previously approved hashes, version diff | `services/integrations.py` |
-| Vault (Fernet-encrypted secrets addressed by reference) | `services/vault.py` |
-| Runtime authorisation, per-user rate limit, concurrency cap, execution records | `services/runtime.py` |
-| Monitoring, alerts, drift detection, automatic repair proposals | `services/monitoring.py`, `services/repairs.py` |
-| Workflows: DAG, parallel layers, conditions, step-output references, dry run, manual/webhook/schedule triggers, HMAC signatures + replay protection | `services/workflows.py` |
-| MCP gateway (JSON-RPC: initialize, tools/list, tools/call) | `services/mcp.py`, `POST /mcp` |
-| OpenAPI 3 import | `services/openapi.py` |
-| RBAC (user/admin/owner), API tokens (never allowed to govern), CSRF header for cookie sessions, invitations, audit log | `core/security.py`, `api/` |
-| UI (no build step) | `backend/app/static/` |
-
-Interactive API docs: http://127.0.0.1:8000/docs.
-
-## Deliberate simplifications (vs. the blueprint)
-
-- **Modular monolith, no Redis/Celery**: background work (pipeline, repairs, webhook runs, scheduler) uses in-process
-  threads. Fine for a single instance; move to a queue before scaling out.
-- **Vanilla-JS SPA instead of Next.js/React Flow**: served by FastAPI, no build step; the workflow editor is a custom
-  SVG canvas with an inspector.
-- **Own provider adapters instead of LiteLLM**: three adapters cover OpenAI-compatible, Anthropic and Gemini APIs.
-- **Tables are created with `create_all`** rather than Alembic migrations; add Alembic before the schema evolves in production.
-- **Vault** is an encrypted table, not HashiCorp Vault / a cloud KMS. The interface (`store_secret`/`read_secret` by ref) is the seam.
-- **Not implemented**: OAuth authorization-code/PKCE connection flows (tokens are pasted into the connection form),
-  GraphQL/other transports, streaming chat (the UI polls), OpenTelemetry export.
-- **DNS rebinding**: destinations are resolved and checked before each request, but the connection is not pinned to the
-  checked IP; run the app behind an egress proxy/firewall in production.
-
-See **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** for a full explanation of every feature and the three roles, and
-`docs/ARCHITECTURE.md` for the data model, trust boundaries and the configuration format.
+- **Background work:** pipeline, healing, schedulers and the Slack connection run in-process threads. Use one instance,
+  or add a queue before scaling out.
+- **Database schema:** tables are created and extended automatically. Add Alembic migrations before the schema evolves
+  in production.
+- **DNS rebinding:** destinations are checked before each request but the connection is not pinned to the checked IP.
+  Run behind an egress proxy in production.

@@ -1,6 +1,6 @@
-# H.E.D.E.S — Functional Guide
+# H.A.D.E.S — Functional Guide
 
-This guide explains every feature of H.E.D.E.S, who may use it, and what happens behind the scenes.
+This guide explains every feature of H.A.D.E.S, who may use it, and what happens behind the scenes.
 For component design and trust boundaries see [ARCHITECTURE.md](ARCHITECTURE.md); for setup see the [README](../README.md).
 
 **Contents**
@@ -418,9 +418,9 @@ Google, Microsoft, GitHub and Atlassian (Jira) connect with the provider's own s
 
 1. **Once, an administrator** opens **Settings → Sign-in providers**, follows the provider's steps to register an OAuth app,
    adds the shown **redirect URI** (`<public URL>/api/v1/oauth/callback`) to it, and saves its client ID and secret (the secret goes to the vault).
-2. **Anyone** presses **Continue with <provider>** in **Credentials**, signs in and approves read access. H.E.D.E.S asks for the
+2. **Anyone** presses **Continue with <provider>** in **Credentials**, signs in and approves read access. H.A.D.E.S asks for the
    scopes of every data source that provider offers, so one sign-in covers them all.
-3. Back in H.E.D.E.S the **Import data sources** dialog lists the provider's sources (Google Workspace users, sign-ins and admin
+3. Back in H.A.D.E.S the **Import data sources** dialog lists the provider's sources (Google Workspace users, sign-ins and admin
    activity; Microsoft 365 users, sign-ins and security alerts; GitHub organisation members and Dependabot alerts; Jira issues and
    users - the Jira site is picked up automatically). Each becomes a draft integration that runs its safe tests and then needs an
    administrator's approval, like any other.
@@ -574,9 +574,9 @@ Problems appear in a banner above the graph.
   - `X-Integra-Delivery` (optional): a unique id. A repeated id is rejected as a replay.
   - Bodies are limited to 256 KB. The run starts in the background (HTTP 202).
 - **Schedule** triggers are checked every 30 seconds and run when their interval has elapsed.
-- **Automatic** triggers start the workflow when a H.E.D.E.S event happens and every trigger condition holds:
+- **Automatic** triggers start the workflow when a H.A.D.E.S event happens and every trigger condition holds:
   - *failure* - a tool call, data-source run or workflow run fails (`${trigger.tool}`, `${trigger.integration}`, `${trigger.error_class}`, `${trigger.http_status}`, `${trigger.error}`, `${trigger.workflow}`, `${trigger.link}`);
-  - *alert* - H.E.D.E.S raises an alert (`${trigger.kind}`, `${trigger.severity}`, `${trigger.message}`, `${trigger.link}`);
+  - *alert* - H.A.D.E.S raises an alert (`${trigger.kind}`, `${trigger.severity}`, `${trigger.message}`, `${trigger.link}`);
   - *record* - a data source stores a new event (`${trigger.source}`, `${trigger.title}`, `${trigger.severity}`, `${trigger.category}`, ...).
   Example: post every authentication failure to Slack with the condition `${trigger.error_class} eq auth_invalid`. A failure caused by an automatic run never starts another automatic run, and the same event starts a workflow at most once every 5 minutes.
 
@@ -767,7 +767,7 @@ without any API key.
 
 ## 22. MCP gateway for AI agents
 
-H.E.D.E.S exposes approved tools to Model Context Protocol clients at `POST /mcp`.
+H.A.D.E.S exposes approved tools to Model Context Protocol clients at `POST /mcp`.
 
 - **Authentication:** `Authorization: Bearer <personal API token>`. The agent acts with the token owner's role.
 - **Methods:**

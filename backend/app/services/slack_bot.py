@@ -1,13 +1,13 @@
 """Slack as a channel to the AI assistant.
 
-People talk to the assistant in a direct message with the H.E.D.E.S app or by @mentioning it in a channel. It is the
-same assistant as the in-app console: the same tools, the same permissions (each person acts as their linked H.E.D.E.S
+People talk to the assistant in a direct message with the H.A.D.E.S app or by @mentioning it in a channel. It is the
+same assistant as the in-app console: the same tools, the same permissions (each person acts as their linked H.A.D.E.S
 account) and the same rule that nothing changes until that person presses Approve.
 
-Connection: Slack Socket Mode. H.E.D.E.S opens an outbound WebSocket to Slack, so no public URL or tunnel is needed and
+Connection: Slack Socket Mode. H.A.D.E.S opens an outbound WebSocket to Slack, so no public URL or tunnel is needed and
 every event arrives over an authenticated connection created with the app-level token.
 
-Identity: a Slack user is linked to a H.E.D.E.S account with a one-time code generated in that person's signed-in
+Identity: a Slack user is linked to a H.A.D.E.S account with a one-time code generated in that person's signed-in
 session (Settings > Slack). Unlinked or disabled accounts are refused. Secrets are never accepted in Slack.
 """
 from __future__ import annotations
@@ -39,8 +39,8 @@ STATUS: dict[str, dict] = {}  # org_id -> {"state", "detail", "since"}
 LAST_EVENT: dict[str, str] = {}  # org_id -> when Slack last delivered a message or button click
 _BRIDGES: dict[str, "Bridge"] = {}
 MANIFEST = {
-    "display_information": {"name": "H.E.D.E.S", "description": "Talk to the H.E.D.E.S AI assistant"},
-    "features": {"bot_user": {"display_name": "H.E.D.E.S", "always_online": True},
+    "display_information": {"name": "H.A.D.E.S", "description": "Talk to the H.A.D.E.S AI assistant"},
+    "features": {"bot_user": {"display_name": "H.A.D.E.S", "always_online": True},
                  "app_home": {"messages_tab_enabled": True, "messages_tab_read_only_enabled": False}},
     # users:read lets bots.info confirm the bot token and the app-level token come from the same app
     # channels:read names a #channel mention that Slack sends as a bare ID
@@ -111,7 +111,7 @@ def post_alert(db: Session, org: Organization, alert: dict) -> str | None:
     icon = {"critical": ":rotating_light:", "high": ":red_circle:", "medium": ":large_orange_circle:"}.get(alert.get("severity"), ":information_source:")
     try:
         call(tokens(db, org)[0], "chat.postMessage", channel=cfg["alert_channel"],
-             text=f"{icon} *{alert.get('kind', 'alert').replace('_', ' ')}* ({alert.get('severity', 'info')})\n{alert['message']}\n<{link}|Open in H.E.D.E.S>")
+             text=f"{icon} *{alert.get('kind', 'alert').replace('_', ' ')}* ({alert.get('severity', 'info')})\n{alert['message']}\n<{link}|Open in H.A.D.E.S>")
         return "sent"
     except Exception as e:  # noqa: BLE001 - reported like every other delivery channel
         hint = " - invite the app to the channel with /invite" if "not_in_channel" in str(e) else ""
@@ -184,7 +184,7 @@ def mrkdwn(text: str) -> str:
     base = get_settings().public_base_url.rstrip("/")
     text = re.sub(r"\[([^\]]+)\]\(/?(#/[^)\s]*)\)", lambda m: f"<{base}/{m.group(2)}|{m.group(1)}>", text)  # [Workflows](/#/workflows)
     text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"<\2|\1>", text)
-    text = re.sub(r"(?<![\w/])#/([\w/-]+)", lambda m: f"<{base}/#/{m.group(1)}|open in H.E.D.E.S>", text)
+    text = re.sub(r"(?<![\w/])#/([\w/-]+)", lambda m: f"<{base}/#/{m.group(1)}|open in H.A.D.E.S>", text)
     # a channel ID becomes a channel link, which Slack shows as the channel's real name (#failures)
     return re.sub(r"`?(?<![\w<|])#?([CG](?=[A-Z]*\d)[A-Z0-9]{8,})\b`?", r"<#\1>", text)
 
@@ -231,7 +231,7 @@ def _post_reply(token: str, db: Session, msg: AssistantMessage, channel: str, th
     if (msg.meta or {}).get("credential_requests"):
         base = get_settings().public_base_url.rstrip("/")
         call(token, "chat.postMessage", channel=channel, thread_ts=thread_ts,
-             text=f":lock: Credentials are never accepted in Slack. Connect them securely in H.E.D.E.S: <{base}/#/credentials|Credentials>.")
+             text=f":lock: Credentials are never accepted in Slack. Connect them securely in H.A.D.E.S: <{base}/#/credentials|Credentials>.")
     for act in db.scalars(select(AssistantAction).where(AssistantAction.message_id == msg.id, AssistantAction.status == "proposed")).all():
         call(token, "chat.postMessage", channel=channel, thread_ts=thread_ts, text=f"Approval needed: {act.tool}", blocks=action_blocks(act))
 
@@ -254,13 +254,13 @@ def handle_message(db: Session, org: Organization, token: str, event: dict) -> N
         u = redeem_link_code(db, org, link.group(1), user)
         db.commit()
         call(token, "chat.postMessage", channel=channel, thread_ts=thread_ts,
-             text=(f":white_check_mark: Linked to H.E.D.E.S account *{u.username}*. Ask me anything about your integrations, data sources, "
-                   "workflows or failures." if u else ":x: That code is invalid or expired. Generate a new one in H.E.D.E.S > Settings > Slack."))
+             text=(f":white_check_mark: Linked to H.A.D.E.S account *{u.username}*. Ask me anything about your integrations, data sources, "
+                   "workflows or failures." if u else ":x: That code is invalid or expired. Generate a new one in H.A.D.E.S > Settings > Slack."))
         return
     p = principal_for(db, org, user)
     if not p:
         call(token, "chat.postMessage", channel=channel, thread_ts=thread_ts,
-             text="I don't know you yet. In H.E.D.E.S open *Settings > Slack* and press *Link my Slack account*, then send me `link <code>`.")
+             text="I don't know you yet. In H.A.D.E.S open *Settings > Slack* and press *Link my Slack account*, then send me `link <code>`.")
         return
     thread = _thread_for(db, p, f"slack:{channel}:{thread_ts}", text)
     if thread is None:

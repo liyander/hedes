@@ -81,7 +81,7 @@ const messageHtml = (m) => {
 
 function welcome(compact) {
   const page = getPage();
-  return `<div class="awelcome"><h3>Ask me anything about H.E.D.E.S</h3>
+  return `<div class="awelcome"><h3>Ask me anything about H.A.D.E.S</h3>
     <p class="muted small">I can explain pages and options, look into your integrations and data sources, troubleshoot failures, and perform actions — <b>every change waits for your approval</b>. Type <code>@</code> to tag an integration, source, workflow or credential so I can read it directly.</p>
     <div class="suggest one">${SUGGESTIONS.map((s) => `<button data-suggest="${esc(s)}">${esc(s)}</button>`).join('')}</div>
     ${compact ? '' : ''}<p class="small muted" style="margin-top:10px">You are on <b>${esc(page)}</b>; I know what this page does.</p></div>`;

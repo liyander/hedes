@@ -76,7 +76,7 @@ def test_slack_channel_end_to_end(server, ai, slack):
     dm(org, "UADMIN", "link 000000" if code != "000000" else "link 111111")
     assert "invalid or expired" in slack.posts()[-1]["text"]
     dm(org, "UADMIN", f"`link {code}`")                                                # Slack sends it formatted as code
-    assert "Linked to H.E.D.E.S account *admin*" in slack.posts()[-1]["text"]
+    assert "Linked to H.A.D.E.S account *admin*" in slack.posts()[-1]["text"]
     assert any(l["username"] == "admin" for l in admin.get("/api/v1/settings/slack").json()["links"])
 
     # a question: the model looks up failures (read-only, runs automatically) and answers in the thread
@@ -92,7 +92,7 @@ def test_slack_channel_end_to_end(server, ai, slack):
     with session_scope() as db:
         before = db.query(Workflow).filter_by(organization_id=org).count()
     # first the model forgets a required input: no buttons are offered, it is told what is missing and asks instead
-    ping = {"tool": "notify.send_message", "label": "Ping ops", "inputs": {"channel": "ops", "text": "Ping from H.E.D.E.S"}}
+    ping = {"tool": "notify.send_message", "label": "Ping ops", "inputs": {"channel": "ops", "text": "Ping from H.A.D.E.S"}}
     ai.script = [{"reply": "I can create that workflow.", "tool_calls": [{"tool": "create_workflow", "args": {
                       "name": "Ops ping", "steps": [{"tool": "notify.send_message", "inputs": {"text": "Ping"}}]}}]},
                  {"reply": "Which channel should I ping?"}]
@@ -136,7 +136,7 @@ def test_slack_channel_end_to_end(server, ai, slack):
 
 def test_markdown_becomes_slack_mrkdwn():
     out = slack_bot.mrkdwn("**Done**: see [the docs](https://x.io) and #/workflows/abc")
-    assert out.startswith("*Done*: see <https://x.io|the docs> and <") and "/#/workflows/abc|open in H.E.D.E.S>" in out
+    assert out.startswith("*Done*: see <https://x.io|the docs> and <") and "/#/workflows/abc|open in H.A.D.E.S>" in out
     assert slack_bot.mrkdwn("visit the [Workflows](/#/workflows) page").endswith("/#/workflows|Workflows> page")
 
 
@@ -273,10 +273,10 @@ def test_replies_under_an_alert_discuss_it_and_apply_the_fix(server, ai, slack):
     channel_msg(org, "UADMIN", "a reply under someone else's message", ts="7.2", thread_ts="7.1", parent_user="UOTHER")
     assert len(slack.posts()) == posted
 
-    slack.parent = "H.E.D.E.S Alert: workflow Broken ping failed: inputs: 'text' is a required property"
+    slack.parent = "H.A.D.E.S Alert: workflow Broken ping failed: inputs: 'text' is a required property"
     ai.script = [{"reply": "Broken ping is missing its text.", "tool_calls": [{"tool": "update_workflow", "args": {
-        "workflow_id": wf["id"], "steps": {"ping": {"inputs": {"text": "Ping from H.E.D.E.S"}}}}}]}]
-    channel_msg(org, "UADMIN", "fix this using the text Ping from H.E.D.E.S", ts="8.1", thread_ts="8.0", parent_user="UBOT")
+        "workflow_id": wf["id"], "steps": {"ping": {"inputs": {"text": "Ping from H.A.D.E.S"}}}}}]}]
+    channel_msg(org, "UADMIN", "fix this using the text Ping from H.A.D.E.S", ts="8.1", thread_ts="8.0", parent_user="UBOT")
     assert "Broken ping failed" in ai.prompts[-1] and "untrusted_document" in ai.prompts[-1]
     reply, card = slack.posts()[-2:]
     assert reply["channel"] == "CFAIL" and reply["thread_ts"] == "8.0" and card["blocks"][1]["elements"][0]["action_id"] == "hedes_approve"
@@ -286,7 +286,7 @@ def test_replies_under_an_alert_discuss_it_and_apply_the_fix(server, ai, slack):
         "type": "block_actions", "user": {"id": "UADMIN"}, "actions": [{"action_id": "hedes_approve", "value": card["blocks"][1]["elements"][0]["value"]}],
         "container": {"channel_id": "CFAIL", "message_ts": "8.2"}, "message": {"ts": "8.2", "thread_ts": "8.0"}}})
     after = admin.get(f"/api/v1/workflows/{wf['id']}").json()
-    assert after["graph"]["nodes"][0]["inputs"] == {"channel": "ops", "text": "Ping from H.E.D.E.S"} and after["validation"]["valid"]
+    assert after["graph"]["nodes"][0]["inputs"] == {"channel": "ops", "text": "Ping from H.A.D.E.S"} and after["validation"]["valid"]
 
     ai.script = [{"reply": "It is fixed now."}]
     channel_msg(org, "UADMIN", "thanks, is it valid now?", ts="8.3", thread_ts="8.0", parent_user="UBOT")  # the thread continues
@@ -303,7 +303,7 @@ def test_replies_under_an_alert_discuss_it_and_apply_the_fix(server, ai, slack):
     approve(slack.posts()[-1], "8.5")
     # earlier tests may have broken the Notify integration on purpose, so the run's outcome varies: what matters is
     # that the model sees each step, what it sent and what came back
-    assert '"dry_run": false' in ai.prompts[-1] and '"node": "ping"' in ai.prompts[-1] and '"text": "Ping from H.E.D.E.S"' in ai.prompts[-1]
+    assert '"dry_run": false' in ai.prompts[-1] and '"node": "ping"' in ai.prompts[-1] and '"text": "Ping from H.A.D.E.S"' in ai.prompts[-1]
     assert slack.posts()[-1]["text"] == "The run succeeded: step ping delivered the message."
 
     ai.script = [{"reply": "Activating it.", "tool_calls": [{"tool": "set_workflow_status", "args": {"workflow_id": wf["id"], "active": True}}]}]

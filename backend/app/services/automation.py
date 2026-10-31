@@ -1,4 +1,4 @@
-"""Automatic workflow triggers: H.E.D.E.S events (a failure, an alert, a new record) start the active workflows whose
+"""Automatic workflow triggers: H.A.D.E.S events (a failure, an alert, a new record) start the active workflows whose
 trigger is `automatic`, listens for that event and whose conditions all hold.
 
 Events are collected on the database session and dispatched only after the transaction commits, so a rolled-back
@@ -19,7 +19,7 @@ log = logging.getLogger("hedes.automation")
 
 EVENTS = {
     "failure": "A tool call, data-source run or workflow run fails",
-    "alert": "H.E.D.E.S raises an alert (credentials, failing sources, self-healing, approvals, drift)",
+    "alert": "H.A.D.E.S raises an alert (credentials, failing sources, self-healing, approvals, drift)",
     "record": "A data source stores a new event record",
 }
 # Fields each event carries, shown in the editor so conditions and inputs can reference ${trigger.<field>}.

@@ -1,4 +1,4 @@
-"""H.E.D.E.S - FastAPI application entry point."""
+"""H.A.D.E.S - FastAPI application entry point."""
 from __future__ import annotations
 
 import logging
@@ -37,7 +37,7 @@ async def lifespan(_app: FastAPI):
     _stop.set()
 
 
-app = FastAPI(title="H.E.D.E.S", version="1.0.0", lifespan=lifespan,
+app = FastAPI(title="H.A.D.E.S", version="1.0.0", lifespan=lifespan,
               description="AI-assisted, configuration-driven integration platform with admin-governed activation.")
 
 for r in (auth.router, users.router, slack.router, oauth.router, healing.router, ai.router, integrations.router, approvals.router, connections.router, runtime.router,

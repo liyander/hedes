@@ -1,7 +1,7 @@
 import { $, api, esc, icon, badge, method, agoCell, pageHead, emptyState, toast, json, confirmBox, riskBadge, readFile } from '../lib.js';
 import { go, route, isAdmin, state } from '../app.js';
 import { askAbout } from '../assistant.js';
-import { connectModal } from './credentials.js';
+import { connectModal, typeLabel } from './credentials.js';
 import { setupHtml } from './studio.js';
 
 export async function render(ctx) {
@@ -92,7 +92,7 @@ async function renderDetail({ el, params }) {
       ${badge(v.status)} ${riskBadge(v.risk.level, v.risk.score)} ${v.tests ? badge(v.tests.result, `tests ${v.tests.passed}/${v.tests.total}`) : badge('draft', 'not tested')}
       <span class="muted small mono" title="Configuration hash">#${esc(v.config_hash.slice(0, 12))}</span>
     </div>
-    ${auth.type && auth.type !== 'none' ? `<div class="callout info small" style="margin-bottom:14px"><div class="row between"><span>${icon('key', 14)} Uses the <b>${esc(auth.type)}</b> connection <code>${esc(auth.credential_ref)}</code>${v.security.checks?.credential_connected === false ? ' — <b>not connected yet</b>' : v.security.checks?.credential_connected ? ' — connected' : ''}.</span>
+    ${auth.type && auth.type !== 'none' ? `<div class="callout info small" style="margin-bottom:14px"><div class="row between"><span>${icon('key', 14)} Uses the <b>${esc(typeLabel(auth.type))}</b> connection <code>${esc(auth.credential_ref)}</code>${v.security.checks?.credential_connected === false ? ' — <b>not connected yet</b>' : v.security.checks?.credential_connected ? ' — connected' : ''}.</span>
       ${v.security.checks?.credential_connected ? '' : `<button class="btn sm" data-a="connect">Connect</button>`}</div></div>` : ''}
     ${v.notes ? `<div class="callout small" style="margin-bottom:14px">${esc(v.notes)}</div>` : ''}
     ${guideHtml(guide)}
@@ -146,7 +146,7 @@ async function renderDetail({ el, params }) {
     } else if (t === 'tests') {
       pane.innerHTML = `<div class="card"><div class="card-head"><h2>Safe test runs</h2><span class="muted small">Mocked transport — no live API is contacted before approval</span><span class="spacer"></span>${isDraft ? '<button class="btn sm" data-a="tests">Run again</button>' : ''}</div><div class="card-body">
         ${v.test_runs.length ? v.test_runs.map((r, n) => `<details ${n === 0 ? 'open' : ''} style="margin-bottom:10px"><summary class="row" style="cursor:pointer">${badge(r.result)} <b>${r.report.passed}/${r.report.total} passed</b> <span class="muted small">${agoCell(r.executed_at)}${r.current ? '' : ' · for an earlier config'}</span></summary>
-          ${r.report.cases.map((c) => `<div class="finding">${badge(c.passed ? 'passed' : 'failed')}<div><b class="small">${esc(c.name)}</b><div class="small muted">expected <code>${esc(c.expect)}</code>, got <code>${esc(c.actual)}</code>${c.request?.url ? ` · ${esc(c.request.method)} <span class="mono">${esc(c.request.url)}</span>` : ''}</div></div></div>`).join('')}</details>`).join('')
+          ${r.report.cases.map((c) => `<div class="finding">${badge(c.passed ? 'passed' : 'failed')}<div><b class="small">${esc(c.name)}</b><div class="small muted">expected <code>${esc(c.expect)}</code>, got <code>${esc(c.actual)}</code>${c.request?.url ? `<span class="req mono">${esc(c.request.method)} ${esc(c.request.url)}</span>` : ''}</div></div></div>`).join('')}</details>`).join('')
           : '<p class="muted">No test runs yet.</p>'}</div></div>`;
     } else if (t === 'versions') {
       pane.innerHTML = `<div class="card"><div class="table-scroll"><table><thead><tr><th>Version</th><th>Status</th><th>Source</th><th>Risk</th><th>Tests</th><th>Hash</th><th>Created</th><th></th></tr></thead><tbody>

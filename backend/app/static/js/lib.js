@@ -24,7 +24,7 @@ export async function api(path, { method = 'GET', body } = {}) {
     if (res.status === 401 && path !== '/auth/login' && path !== '/auth/me') { location.hash = '#/login'; }
     if (res.status === 404 && msg === 'Not Found') {
       // FastAPI's answer for a route that does not exist: the page is newer than the running server.
-      msg = 'This action is not available on the running server - it is older than this page. Restart H.E.D.E.S (close its window and run run.bat again), then try again.';
+      msg = 'This action is not available on the running server - it is older than this page. Restart H.A.D.E.S (close its window and run run.bat again), then try again.';
       window.dispatchEvent(new CustomEvent('hedes:stale'));
     }
     throw new ApiError(res.status, msg || `Request failed (${res.status})`);
@@ -110,12 +110,16 @@ export const method = (m) => `<span class="method ${esc(m)}">${esc(m)}</span>`;
 export const json = (v) => `<pre>${esc(JSON.stringify(v, null, 2))}</pre>`;
 
 export function md(text) {
-  // Minimal, safe markdown: escape first, then bold, inline code, bullet lists, paragraphs.
+  // Minimal, safe markdown: escape first, then headings, bold, inline code, bullet lists, paragraphs.
   const lines = esc(text).split('\n');
   let out = '', list = false;
   for (const raw of lines) {
     const line = raw.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
-    if (/^\s*[-*] /.test(line)) {
+    const heading = line.match(/^\s*#{1,6}\s+(.+)$/);
+    if (heading) {
+      if (list) { out += '</ul>'; list = false; }
+      out += `<p class="md-h"><b>${heading[1]}</b></p>`;
+    } else if (/^\s*[-*] /.test(line)) {
       if (!list) { out += '<ul>'; list = true; }
       out += `<li>${line.replace(/^\s*[-*] /, '')}</li>`;
     } else {

@@ -3,13 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>H.E.D.E.S — Hybrid Automated Data Exchange System</title>
+  <title>H.A.D.E.S — Hybrid Automated Data Exchange System</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/js/theme.js"></script>
 </head>
 <body>
-  <div id="app"><div class="boot" role="status"><span class="spinner"></span></div></div>
+  <div id="app"><div class="boot" role="status" aria-live="polite">
+    <img class="boot-logo" src="/static/favicon.svg" alt="" width="48" height="48">
+    <div class="boot-name">H.A.D.E.S</div>
+    <div class="boot-sub">Hybrid Automated Data Exchange System</div>
+    <div class="boot-bar" aria-hidden="true"><span></span></div>
+    <div class="boot-note"><span>Loading your workspace…</span><span class="boot-slow">Still starting - the server may be waking up. This can take up to a minute.</span></div>
+  </div></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="/static/js/app.js"></script>
 </body>

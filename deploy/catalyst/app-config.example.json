@@ -1,0 +1,16 @@
+{
+  "command": "python3 -u start.py",
+  "build_path": "build",
+  "stack": "python_3_12",
+  "env_variables": {
+    "DATABASE_URL": "<database_url>",
+    "JWT_SECRET": "<jwt_secret>",
+    "SECRET_ENCRYPTION_KEY": "<secret_encryption_key>",
+    "COOKIE_SECURE": "true",
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PUBLIC_BASE_URL": "<public_base_url>"
+  },
+  "memory": 1024,
+  "scripts": {}
+}

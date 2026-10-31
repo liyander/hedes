@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://integra.ai/schemas/workflow-1.0.json",
-  "title": "H.E.D.E.S workflow graph",
+  "title": "H.A.D.E.S workflow graph",
   "type": "object",
   "required": ["trigger", "nodes"],
   "additionalProperties": false,
@@ -13,7 +13,7 @@
       "properties": {
         "type": { "enum": ["manual", "webhook", "schedule", "automatic"] },
         "interval_minutes": { "type": "integer", "minimum": 1, "maximum": 10080 },
-        "event": { "enum": ["failure", "alert", "record"], "description": "automatic: the H.E.D.E.S event that starts the workflow" },
+        "event": { "enum": ["failure", "alert", "record"], "description": "automatic: the H.A.D.E.S event that starts the workflow" },
         "conditions": {
           "description": "automatic: start only when all of these hold for the event (fields as ${trigger.<field>})",
           "type": "array",

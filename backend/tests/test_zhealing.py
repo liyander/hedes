@@ -100,7 +100,7 @@ def test_off_by_default_then_traces_a_broken_credential_and_emails_the_admin(adm
                 break
             time.sleep(0.25)
         msg = FakeSMTP.sent[0]
-        assert msg["Subject"].startswith("[H.E.D.E.S] Action needed - Self-healing could not fix this on its own: notify.send_message")
+        assert msg["Subject"].startswith("[H.A.D.E.S] Action needed - Self-healing could not fix this on its own: notify.send_message")
         html = msg.get_body(("html",)).get_content()
         assert "Self-healing needs an administrator" in html and "What I tried:" in html and "Rotate or reconnect the credential" in html
     finally:

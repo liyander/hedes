@@ -281,7 +281,7 @@ function myWhatsappCard(m) {
         otherwise Meta accepts it and silently drops it.
         ${biz ? `<div style="margin-top:6px"><a class="btn sm" href="https://wa.me/${biz}?text=hi" target="_blank" rel="noopener">Open chat with +${esc(biz)}</a> send “hi”, then press Send code.</div>`
           : '<div style="margin-top:6px">Press <b>Check connection</b> in the WhatsApp card to look up the business number.</div>'}</div>`}
-      <div class="field"><label>Your WhatsApp number</label><div class="row"><input type="tel" name="phone" placeholder="+44 7700 900123" autocomplete="tel">
+      <div class="field"><label>Your WhatsApp number</label><div class="row" style="flex-wrap:nowrap"><input type="tel" name="phone" style="flex:1;min-width:0" placeholder="+44 7700 900123" autocomplete="tel">
         <button class="btn" id="wa-code">${m.code_pending ? 'Resend code' : 'Send code'}</button></div><div class="hint">International format with country code. We send a 6-digit code to confirm it is yours.</div></div>
       ${m.code_pending ? `<div class="field"><label>Code sent to ${esc(m.phone)}</label><div class="row"><input type="text" name="code" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code"><button class="btn primary" id="wa-verify">Verify</button></div></div>` : ''}`;
   } else {
@@ -376,7 +376,7 @@ function slackCard(s) {
   return `<div class="card"><div class="card-head"><h2>Slack: talk to the AI</h2><span class="spacer"></span>
       ${badge(SLACK_STATE[st.state] || '', s.enabled ? st.state : 'off')}${s.team ? ` <span class="muted small">${esc(s.team)} · @${esc(s.bot_name)}</span>` : ''}</div>
     <div class="card-body" id="slack">
-      <p class="small muted" style="margin-top:0">Administrators can DM the H.E.D.E.S app or @mention it in a channel and do everything the AI assistant can:
+      <p class="small muted" style="margin-top:0">Administrators can DM the H.A.D.E.S app or @mention it in a channel and do everything the AI assistant can:
         ask about integrations, data sources and failures, discuss self-healing cases, create and run workflows, run tools. Every change shows
         <b>Approve</b> / <b>Reject</b> buttons and runs only after the person who asked approves it. Secrets are never accepted in Slack.
         It connects out to Slack (Socket Mode), so no public URL is needed.</p>
@@ -419,7 +419,7 @@ function wireSlack(el, s) {
   $('#slack-link', el).addEventListener('click', async () => {
     try {
       const r = await api('/settings/slack/link-code', { method: 'POST' });
-      $('#slack-code', el).innerHTML = `In Slack, send the H.E.D.E.S app a direct message: <code>link ${esc(r.code)}</code> <span class="muted">(valid ${Math.round(r.expires_in / 60)} min)</span>`;
+      $('#slack-code', el).innerHTML = `In Slack, send the H.A.D.E.S app a direct message: <code>link ${esc(r.code)}</code> <span class="muted">(valid ${Math.round(r.expires_in / 60)} min)</span>`;
     } catch (err) { toast(err.message, 'bad'); }
   });
   root.addEventListener('click', async (e) => {

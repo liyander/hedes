@@ -105,12 +105,20 @@ async function renderEditor({ el, params }) {
       <div class="field" style="margin-top:10px"><label>Label</label><input type="text" id="nl" value="${esc(n.label || '')}"></div>
       <div class="field"><label>Tool</label><select id="nt">${Object.keys(tools).map((k) => `<option ${k === n.tool ? 'selected' : ''}>${esc(k)}</option>`).join('')}${tools[n.tool] ? '' : `<option selected>${esc(n.tool)} (unavailable)</option>`}</select>
         ${tool ? `<div class="hint">Outputs: ${(tool.output_fields || []).map((f) => `<code>\${steps.${esc(n.id)}.output.${esc(f)}}</code>`).join(' ')}</div>` : '<div class="hint" style="color:var(--bad)">Not published or not available to the owner.</div>'}</div>
-      <label>Inputs</label>${keys.map((k) => `<div class="field"><label class="small muted">${esc(k)}${req.has(k) ? ' *' : ''}</label><input type="text" data-in="${esc(k)}" value="${esc(typeof n.inputs?.[k] === 'string' || n.inputs?.[k] === undefined ? (n.inputs?.[k] ?? '') : JSON.stringify(n.inputs[k]))}" placeholder="literal or \${trigger.x}"></div>`).join('') || '<p class="muted small">No inputs.</p>'}
+      <label>Inputs</label>${keys.map((k) => inputField(k, n.inputs?.[k], req.has(k))).join('') || '<p class="muted small">No inputs.</p>'}
       <div class="field"><label>Runs after</label>${others.length ? others.map((o) => `<label class="check small"><input type="checkbox" data-dep="${esc(o.id)}" ${(n.depends_on || []).includes(o.id) ? 'checked' : ''}> ${esc(o.label || o.id)}</label>`).join('') : '<p class="muted small">The trigger.</p>'}</div>
       <div class="field"><label>Only if (all must hold)</label><div id="conds">${(n.when || []).map((c, i) => condRow(c, i)).join('')}</div><button class="btn sm" id="add-cond">${icon('plus', 13)} Condition</button></div>
       <div class="field"><label>On failure</label><select id="nf"><option value="stop" ${n.on_failure !== 'continue' ? 'selected' : ''}>Stop the run</option><option value="continue" ${n.on_failure === 'continue' ? 'selected' : ''}>Continue other steps</option></select>
         <div class="hint">Create/update calls are never retried automatically unless the API is idempotent.</div></div></div>`;
   }
+  // Message-like inputs (and any value with line breaks) get a multi-line box: a one-line field would drop the breaks.
+  const MULTILINE = /^(text|message|body|description|comment|content|summary|blocks)$/i;
+  const inputField = (k, v, required) => {
+    const value = typeof v === 'string' || v === undefined ? (v ?? '') : JSON.stringify(v);
+    const attrs = `data-in="${esc(k)}" placeholder="literal or \${trigger.x}"`;
+    return `<div class="field"><label class="small muted">${esc(k)}${required ? ' *' : ''}</label>${MULTILINE.test(k) || value.includes('\n')
+      ? `<textarea ${attrs} rows="4" style="min-height:0">${esc(value)}</textarea>` : `<input type="text" ${attrs} value="${esc(value)}">`}</div>`;
+  };
   const condRow = (c, i) => `<div class="row" style="margin-bottom:6px" data-cond="${i}"><input type="text" data-c="left" value="${esc(c.left)}" style="flex:2" placeholder="\${trigger.labels}">
     <select data-c="op" style="flex:1">${OPS.map((o) => `<option ${o === c.op ? 'selected' : ''}>${o}</option>`).join('')}</select>
     <input type="text" data-c="right" value="${esc(c.right ?? '')}" style="flex:1.4" placeholder="value"><button class="btn sm ghost" data-rmcond="${i}">${icon('x', 13)}</button></div>`;

@@ -151,7 +151,7 @@ def run_mock_tests(config: dict, cases: list[dict]) -> dict:
             results.append({**case, "passed": False, "actual": "unknown operation"})
             continue
         res = engine.execute(config, case["operation"], case.get("inputs") or {}, credential={"token": "test", "api_key": "test", "username": "test", "password": "test", "client_id": "test",
-                                                  "client_secret": "test", "access_key_id": "test", "secret_access_key": "test"},
+                                                  "client_secret": "test", "access_key_id": "test", "secret_access_key": "test", "access_token": "test"},
                              transport=_mock_transport(case["mock_status"], case.get("mock_response"), captured), live=False)
         actual = "succeeded" if res.status == "succeeded" else res.error_class
         passed = actual == case["expect"]

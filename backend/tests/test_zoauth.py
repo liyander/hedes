@@ -62,6 +62,7 @@ def test_continue_with_google_connects_and_imports_its_sources(server, provider)
     assert "at-1" not in str(conns["google"])                                                  # tokens never leave the vault
 
     r = builder.post("/api/v1/oauth/google/import", json={"templates": ["google-workspace", "okta"]}).json()["results"]
+    assert r[0]["tests"]["result"] == "passed", r[0]["tests"]                                   # the safe tests use a stand-in token
     assert r[0]["ok"] and r[0]["integration"]["slug"] == "google-workspace" and r[1] == {"template": "okta", "ok": False, "error": "Not a template of this provider"}
     assert next(p for p in builder.get("/api/v1/oauth/providers").json() if p["id"] == "google")["templates"][0]["installed"]
 

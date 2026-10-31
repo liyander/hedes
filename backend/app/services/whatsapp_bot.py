@@ -1,4 +1,4 @@
-"""WhatsApp chatbot: browse and operate H.E.D.E.S from a chat with the business number.
+"""WhatsApp chatbot: browse and operate H.A.D.E.S from a chat with the business number.
 
 Only verified administrator numbers (see services/whatsapp.py) get answers; other senders are ignored. Each reply is a
 WhatsApp interactive list or set of buttons whose ids are the next command, so the whole platform is reachable by tapping:
@@ -187,7 +187,7 @@ class Bot:
                 {"id": "wf:list", "title": "Workflows", "description": f"{self._count(Workflow)} in total"},
                 {"id": "ai", "title": "Ask AI", "description": "Or just type a question at any time"}]
         whatsapp.send_list(self.db, self.org, self.phone,
-                           f"*H.E.D.E.S* · {self.org.name}\nHi {self.p.user.name or self.p.user.username}. What do you want to see?",
+                           f"*H.A.D.E.S* · {self.org.name}\nHi {self.p.user.name or self.p.user.username}. What do you want to see?",
                            "Open menu", rows, "Main menu")
 
     # integrations

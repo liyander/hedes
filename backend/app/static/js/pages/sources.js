@@ -3,7 +3,7 @@ import { route, isAdmin, state } from '../app.js';
 import { askAbout } from '../assistant.js';
 
 const HEALTH_LABEL = { healthy: 'Healthy', failing: 'Failing', stale: 'Stale', degraded: 'Bad data', paused: 'Paused', pending: 'Not run yet', running: 'Running' };
-const AUTH_LABEL = { ssws: 'Okta SSWS', aws_sigv4: 'AWS SigV4', api_key_header: 'API key', bearer: 'Bearer', oauth2_client_credentials: 'OAuth2', basic: 'Basic', api_key_query: 'API key', none: 'None' };
+const AUTH_LABEL = { ssws: 'Okta SSWS', aws_sigv4: 'AWS SigV4', api_key_header: 'API key', bearer: 'Bearer', oauth2_client_credentials: 'OAuth2', oauth2_authorization_code: 'Signed in (OAuth)', basic: 'Basic', api_key_query: 'API key', none: 'None' };
 const PAGE_LABEL = { link: 'Link header', cursor: 'Cursor / token', offset: 'Offset', page: 'Page number', none: 'Single page' };
 const RUN_CLASS = { succeeded: 'ok', partial: 'warn', failed: 'bad', running: 'run' };
 

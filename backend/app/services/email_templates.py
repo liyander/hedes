@@ -16,17 +16,17 @@ TEMPLATES: dict[str, dict] = {
     "credential": {
         "name": "Credential problem",
         "kinds": ["auth_invalid", "forbidden", "credential_missing", "credential"],
-        "subject": "[H.E.D.E.S] Action needed: a credential needs attention",
+        "subject": "[H.A.D.E.S] Action needed: a credential needs attention",
         "headline": "A credential needs attention",
         "intro": "An integration could not authenticate, or one of its credentials is expired, missing or due for rotation.",
         "action": "Open Credentials, rotate or reconnect the secret, then press Test.",
         "button": "Open Credentials", "color": "#d97706",
-        "theme": {"dark": "#92400e", "light": "#d97706", "eyebrow": "Credential alert", "tagline": "Found by H.E.D.E.S credential monitoring"},
+        "theme": {"dark": "#92400e", "light": "#d97706", "eyebrow": "Credential alert", "tagline": "Found by H.A.D.E.S credential monitoring"},
     },
     "approval": {
         "name": "Review requested",
         "kinds": ["approval"],
-        "subject": "[H.E.D.E.S] Review requested: {message}",
+        "subject": "[H.A.D.E.S] Review requested: {message}",
         "headline": "An integration is waiting for your review",
         "intro": "A new or changed integration version has passed validation and safe tests and needs an administrator's decision.",
         "action": "Open the review, check what it can do and where it connects, then approve or request changes.",
@@ -36,7 +36,7 @@ TEMPLATES: dict[str, dict] = {
     "api_change": {
         "name": "API changed / repair ready",
         "kinds": ["drift", "repair"],
-        "subject": "[H.E.D.E.S] {severity}: an external API changed",
+        "subject": "[H.A.D.E.S] {severity}: an external API changed",
         "headline": "An external API changed its responses",
         "intro": "The service answered, but the fields an integration relies on have moved or disappeared. A repair is prepared for review where possible.",
         "action": "Review the proposed repair. The live version is not changed until an administrator approves it.",
@@ -46,7 +46,7 @@ TEMPLATES: dict[str, dict] = {
     "data_source": {
         "name": "Data source problem",
         "kinds": ["source_failing", "bad_data"],
-        "subject": "[H.E.D.E.S] {severity}: a data source needs attention",
+        "subject": "[H.A.D.E.S] {severity}: a data source needs attention",
         "headline": "A data source needs attention",
         "intro": "A scheduled data source keeps failing, or many of its records are being rejected.",
         "action": "Open Data Sources to see the last error, recent runs and rejected records.",
@@ -56,7 +56,7 @@ TEMPLATES: dict[str, dict] = {
     "integration_failure": {
         "name": "Integration failure",
         "kinds": ["upstream_error", "not_found", "request_rejected"],
-        "subject": "[H.E.D.E.S] {severity}: an integration is failing",
+        "subject": "[H.A.D.E.S] {severity}: an integration is failing",
         "headline": "An integration is failing",
         "intro": "Calls to an external service are failing: the service returned errors, an endpoint is missing, or requests were rejected.",
         "action": "Open the execution to see the request (credentials redacted), the response and the suggested fix.",
@@ -66,7 +66,7 @@ TEMPLATES: dict[str, dict] = {
     "self_healing": {
         "name": "Self-healing report",
         "kinds": ["self_healing"],
-        "subject": "[H.E.D.E.S] Action needed - {message}",
+        "subject": "[H.A.D.E.S] Action needed - {message}",
         "headline": "Self-healing needs an administrator",
         "intro": "Self-healing traced a failure and tried to fix it. It either could not fix it on its own or prepared a fix that needs your approval. "
                  "The root cause, what it tried and what is required from you are below.",
@@ -77,27 +77,27 @@ TEMPLATES: dict[str, dict] = {
     "general": {
         "name": "Other alerts",
         "kinds": [],
-        "subject": "[H.E.D.E.S] {severity}: {kind}",
+        "subject": "[H.A.D.E.S] {severity}: {kind}",
         "headline": "New alert",
-        "intro": "H.E.D.E.S raised an alert.",
-        "action": "Open H.E.D.E.S for details.",
-        "button": "Open H.E.D.E.S", "color": "#475569",
-        "theme": {"dark": "#1e293b", "light": "#475569", "eyebrow": "Alert", "tagline": "Raised by H.E.D.E.S"},
+        "intro": "H.A.D.E.S raised an alert.",
+        "action": "Open H.A.D.E.S for details.",
+        "button": "Open H.A.D.E.S", "color": "#475569",
+        "theme": {"dark": "#1e293b", "light": "#475569", "eyebrow": "Alert", "tagline": "Raised by H.A.D.E.S"},
     },
     "test": {
         "name": "Test message",
         "kinds": [],
-        "subject": "[H.E.D.E.S] Test notification",
+        "subject": "[H.A.D.E.S] Test notification",
         "headline": "Alert delivery works",
-        "intro": "This is a test message from H.E.D.E.S. If you can read it, email alerts will reach this mailbox.",
+        "intro": "This is a test message from H.A.D.E.S. If you can read it, email alerts will reach this mailbox.",
         "action": "Nothing to do.",
-        "button": "Open H.E.D.E.S", "color": "#2f4f4a",
+        "button": "Open H.A.D.E.S", "color": "#2f4f4a",
         "theme": {"dark": "#1f3532", "light": "#3f6b63", "eyebrow": "Test message", "tagline": "Checking that alert delivery works"},
     },
     "healing_fixed": {
         "name": "Fixed automatically",
         "kinds": ["self_healed"],
-        "subject": "[H.E.D.E.S] Fixed automatically: {message}",
+        "subject": "[H.A.D.E.S] Fixed automatically: {message}",
         "headline": "Self-healing fixed a failure on its own",
         "intro": "Automatic self-healing found the root cause, applied a non-critical fix, verified it and published it. Nothing is required from you; "
                  "the change is recorded in the audit log and can be rolled back from Version History.",
@@ -212,7 +212,7 @@ def render(key: str, *, kind: str, severity: str, message: str, organization: st
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#fcfcfb;font-family:{font};color:#1c1c1a">
 <tr><td bgcolor="{th['dark']}" style="background:{th['dark']};background-image:linear-gradient(135deg,{th['dark']} 0%,{th['light']} 100%);padding:22px 28px 26px">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-  <tr><td style="font-family:{font};font-size:15px;font-weight:700;letter-spacing:.18em;color:#ffffff">&#8644;&nbsp; H.E.D.E.S</td></tr>
+  <tr><td style="font-family:{font};font-size:15px;font-weight:700;letter-spacing:.18em;color:#ffffff">&#8644;&nbsp; H.A.D.E.S</td></tr>
   <tr><td style="padding-top:12px;font-family:Consolas,Menlo,monospace;font-size:12px;line-height:18px;color:rgba(255,255,255,.22);white-space:nowrap;overflow:hidden">{e(noise[0])}<br>{e(noise[1])}</td></tr>
   <tr><td align="center" style="padding:6px 0 2px;font-family:{font};font-size:40px;line-height:1.1;font-weight:700;color:#ffffff">{e(th['eyebrow'])}</td></tr>
   <tr><td align="center" style="padding:6px 0 0;font-family:{font};font-size:15px;color:rgba(255,255,255,.88)">{e(th['tagline'])}</td></tr>
@@ -232,7 +232,7 @@ def render(key: str, *, kind: str, severity: str, message: str, organization: st
 <tr><td style="padding:28px 40px 0"><div style="border-top:1px solid #e3e1dc;line-height:1px;font-size:1px">&nbsp;</div></td></tr>
 <tr><td align="center" style="padding:24px 40px 0"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td width="42" height="42" align="center" bgcolor="#1f2a37"
   style="background:#1f2a37;border-radius:9px;width:42px;height:42px;font-size:20px;line-height:42px;color:#ffffff;font-family:{font}">&#8644;</td></tr></table></td></tr>
-<tr><td align="center" style="padding:12px 40px 0;font-family:{font};font-size:14px;font-weight:700;letter-spacing:.22em;color:#141414">H.E.D.E.S</td></tr>
+<tr><td align="center" style="padding:12px 40px 0;font-family:{font};font-size:14px;font-weight:700;letter-spacing:.22em;color:#141414">H.A.D.E.S</td></tr>
 <tr><td align="center" style="padding:6px 40px 0;font-family:{font};font-size:13px;color:#6b6b6b">Hybrid Automated Data Exchange System{f' &middot; <a href="{e(console, quote=True)}" style="color:#0f766e">Open the console</a>' if console else ''}</td></tr>
 <tr><td align="center" style="padding:4px 40px 30px;font-family:{font};font-size:12px;color:#8a8a8a">This message was sent automatically. Replies are not read.</td></tr>
 </table></td></tr></table></body></html>"""

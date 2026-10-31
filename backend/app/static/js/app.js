@@ -46,7 +46,7 @@ function shell() {
   const u = state.user;
   return `<div class="shell" id="shell">
     <aside class="sidebar">
-      <a class="brand" href="#/dashboard">${LOGO}<div><b>H.E.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></a>
+      <a class="brand" href="#/dashboard">${LOGO}<div><b>H.A.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></a>
       <nav class="nav" id="nav">${NAV.map((g) => `${g.label ? `<div class="nav-label">${g.label}</div>` : ''}${g.items.filter((it) => !it[4] || (it[4] === 'admin' ? isAdmin() : isOwner())).map(([k, label, ic, cnt]) =>
         `<a href="#/${k}" data-nav="${k}">${icon(ic)}<span>${label}</span>${cnt ? `<span class="count warn" data-count="${cnt}" hidden></span>` : ''}</a>`).join('')}`).join('')}</nav>
       <div class="side-status"><a href="#/providers"><span class="dot on" id="ai-dot"></span><div class="ss-text"><b>AI gateway</b><small id="ai-route">checking…</small></div></a></div>
@@ -71,7 +71,7 @@ function shell() {
         <button class="btn ghost icon" data-act="theme" aria-label="Toggle theme">${icon('moon')}</button>
         <div class="pop alerts" id="alert-pop" hidden></div>
       </header>
-      <div class="stale-banner" id="stale-banner" hidden>${icon('refresh', 15)} <span><b>H.E.D.E.S was updated on disk.</b> Restart the server (close its window and run <code>run.bat</code> again) so the new features work. Until then some actions may answer "not available".</span></div>
+      <div class="stale-banner" id="stale-banner" hidden>${icon('refresh', 15)} <span><b>H.A.D.E.S was updated on disk.</b> Restart the server (close its window and run <code>run.bat</code> again) so the new features work. Until then some actions may answer "not available".</span></div>
       <main class="content" id="content"></main>
     </div>
   </div>`;
@@ -172,14 +172,16 @@ export async function route() {
   state.page = key;
   document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === key));
   $('#top-title').textContent = ROUTES[key][1];
-  document.title = `${ROUTES[key][1]} — H.E.D.E.S`;
+  document.title = `${ROUTES[key][1]} — H.A.D.E.S`;
   if (matchMedia('(max-width: 820px)').matches) $('#shell').classList.remove('open');
   installDrawer();
   syncHelpPage(key);
   // A fresh element per route, so listeners a page attaches never outlive it.
   const el = $('#content').cloneNode(false);
   $('#content').replaceWith(el);
-  el.innerHTML = '<div class="page"><span class="spinner"></span></div>';
+  // A skeleton of the usual page layout (header, stat cards, main card) while the page loads its data.
+  el.innerHTML = `<div class="page" aria-busy="true" aria-label="Loading"><div class="skeleton sk-title"></div><div class="skeleton sk-line"></div>
+    <div class="sk-grid">${'<div class="skeleton sk-card"></div>'.repeat(3)}</div><div class="skeleton sk-block"></div></div>`;
   try {
     const mod = await import(ROUTES[key][0]);
     const cleanup = await mod.render({ el, params: parts.slice(1), refreshCounts });

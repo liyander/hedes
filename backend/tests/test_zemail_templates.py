@@ -77,7 +77,7 @@ def test_alerts_are_emailed_with_their_template(server, monkeypatch):
             {"org_id": org_id, "kind": "approval", "severity": "info", "message": "Okta 2.0.0 is waiting for review (tmpl test)", "link": "#/approvals/x"},
         ])
         subjects = [m["Subject"] for m in FakeSMTP.sent]
-        assert subjects == ["[SOC] HIGH credential issue", "[H.E.D.E.S] Review requested: Okta 2.0.0 is waiting for review (tmpl test)"]
+        assert subjects == ["[SOC] HIGH credential issue", "[H.A.D.E.S] Review requested: Okta 2.0.0 is waiting for review (tmpl test)"]
         msg = FakeSMTP.sent[1]
         assert msg.get_content_type() == "multipart/alternative"
         html = msg.get_body(("html",)).get_content()

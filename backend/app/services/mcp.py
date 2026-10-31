@@ -48,7 +48,7 @@ def handle(db: Session, actor: runtime.Actor, msg: dict) -> dict | None:
         wanted = params.get("protocolVersion")
         return _result(id_, {"protocolVersion": wanted if wanted in SUPPORTED_VERSIONS else SUPPORTED_VERSIONS[-1],
                              "capabilities": {"tools": {"listChanged": False}}, "serverInfo": SERVER_INFO,
-                             "instructions": "Tools are approved H.E.D.E.S integrations. Every call is authorised and audited."})
+                             "instructions": "Tools are approved H.A.D.E.S integrations. Every call is authorised and audited."})
     if method == "ping":
         return _result(id_, {})
     if method == "tools/list":

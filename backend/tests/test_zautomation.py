@@ -1,4 +1,4 @@
-"""Automatic workflow triggers: a H.E.D.E.S event that meets the trigger's conditions starts the workflow."""
+"""Automatic workflow triggers: a H.A.D.E.S event that meets the trigger's conditions starts the workflow."""
 from app.core.db import session_scope
 from app.services import audit, automation
 from test_e2e import wait
