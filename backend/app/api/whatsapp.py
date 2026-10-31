@@ -1,16 +1,25 @@
 """WhatsApp alerts: organisation setup (Meta Cloud API), each administrator's own number, and the fix-link actions."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import RedirectResponse
+import hashlib
+import hmac
+import json
+import logging
+import secrets
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from ..core.db import get_db, utcnow
 from ..core.security import Principal, current_principal, require_human
 from ..models import Alert, IngestSource, Organization
-from ..services import audit, ingest, integrations, vault, whatsapp
+from ..services import audit, ingest, integrations, vault, whatsapp, whatsapp_bot
+
+log = logging.getLogger("integra.whatsapp")
 
 router = APIRouter(prefix="/api/v1", tags=["whatsapp"])
 fix_router = APIRouter(include_in_schema=False)
@@ -31,6 +40,9 @@ class WhatsAppConfigIn(BaseModel):
     template_lang: str = Field(default="en", pattern=r"^[A-Za-z]{2,3}(_[A-Za-z]{2,4})?$")
     template_has_button: bool = False
     otp_template: str = Field(default="", pattern=r"^[a-z0-9_]{0,512}$")
+    chat_enabled: bool = False
+    chat_approvals: bool = True
+    app_secret: str | None = Field(default=None, max_length=200)  # omitted = keep, "" = remove
 
 
 @router.get("/settings/whatsapp")
@@ -47,9 +59,17 @@ def save_config(body: WhatsAppConfigIn, p: Principal = Depends(require_human("ad
         cfg.pop("token_ref", None)
         if body.access_token.strip():
             cfg["token_ref"] = vault.store_secret(db, p.org_id, {"access_token": body.access_token.strip()})
-    cfg.update(body.model_dump(exclude={"access_token"}))
+    if body.app_secret is not None:
+        vault.delete_secret(db, cfg.get("app_secret_ref"))
+        cfg.pop("app_secret_ref", None)
+        if body.app_secret.strip():
+            cfg["app_secret_ref"] = vault.store_secret(db, p.org_id, {"app_secret": body.app_secret.strip()})
+    cfg.update(body.model_dump(exclude={"access_token", "app_secret"}))
+    cfg.setdefault("verify_token", secrets.token_urlsafe(24))
     if cfg["enabled"] and not whatsapp.configured(cfg):
         raise HTTPException(422, "Add the phone number ID and an access token before turning WhatsApp on")
+    if cfg["chat_enabled"] and not (whatsapp.configured(cfg) and cfg.get("app_secret_ref")):
+        raise HTTPException(422, "The chatbot needs the phone number ID, access token and the Meta app secret (to verify incoming messages)")
     whatsapp.save_config(org, cfg)
     audit.record(db, p.org_id, p, "settings.whatsapp", org.name, enabled=body.enabled, template=body.alert_template)
     db.commit()
@@ -262,3 +282,47 @@ async def fix_action(token: str, action: str, body: FixActionIn, p: Principal = 
     audit.record(db, p.org_id, p, f"fix.{action}", target, via="whatsapp-fix-link", alert_id=link.alert_id, result=result)
     db.commit()
     return {"result": result, **whatsapp.context(db, link, p)}
+
+
+# ---------- inbound webhook (Meta -> chatbot, delivery statuses) ----------
+
+@router.get("/whatsapp/webhook", include_in_schema=False)
+def webhook_verify(request: Request, db: Session = Depends(get_db)):
+    """Meta's one-time subscription check: echo hub.challenge when hub.verify_token matches an organisation's token."""
+    q = request.query_params
+    token = q.get("hub.verify_token", "")
+    if q.get("hub.mode") == "subscribe" and token:
+        for org in db.scalars(select(Organization)).all():
+            mine = whatsapp.config_of(org).get("verify_token", "")
+            if mine and hmac.compare_digest(mine, token):
+                return PlainTextResponse(q.get("hub.challenge", ""))
+    raise HTTPException(403, "Verification failed")
+
+
+@router.post("/whatsapp/webhook", include_in_schema=False)
+async def webhook(request: Request, db: Session = Depends(get_db)):
+    raw = await request.body()
+    try:
+        data = json.loads(raw or b"{}")
+    except ValueError:
+        raise HTTPException(400, "Invalid JSON")
+    signature = request.headers.get("x-hub-signature-256", "")
+    for entry in data.get("entry") or []:
+        for change in entry.get("changes") or []:
+            value = change.get("value") or {}
+            org = whatsapp.org_for_phone_number_id(db, (value.get("metadata") or {}).get("phone_number_id", ""))
+            if not org:
+                continue
+            secret = whatsapp.app_secret(db, org)
+            expected = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest() if secret else ""
+            if not expected or not hmac.compare_digest(expected, signature):
+                log.warning("WhatsApp webhook rejected: bad or missing signature (check the app secret in Settings)")
+                raise HTTPException(403, "Invalid signature")
+            for st in value.get("statuses") or []:
+                if st.get("status") == "failed":
+                    errs = "; ".join(f"{e.get('code')} {e.get('title') or e.get('message', '')}" for e in st.get("errors") or [])
+                    log.warning("WhatsApp could not deliver a message to %s: %s %s", whatsapp.mask_phone(st.get("recipient_id", "")), errs,
+                                whatsapp.ERRORS.get(((st.get("errors") or [{}])[0]).get("code"), ""))
+            for msg in value.get("messages") or []:
+                whatsapp_bot.enqueue(org.id, msg)
+    return {"ok": True}

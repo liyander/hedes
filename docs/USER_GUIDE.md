@@ -613,6 +613,22 @@ Setup:
      URL button with the URL `<PUBLIC_BASE_URL>/fix/{{1}}` and tick *The template has a “Fix it” URL button*.
    - *Verification-code template* (Authentication) with a copy-code button.
 
+**Chatbot.** With *Answer messages* on, admins can run the platform from a chat with the business number. Send `hi` (or
+`menu`) for a menu, then tap: **Integrations** (status, versions, base URL, auth type, operations, last error, never credentials),
+**Data sources** (health, last runs, *Retry now* / *Pause* / *Resume*), **Alerts** (*Acknowledge*, *Mute 24 h*), **Approvals**
+(diagnosis, changes, blockers, *Approve* → *Confirm approve*, or *Reject* and type the reason) and **Workflows** (status, recent runs).
+The words `integrations`, `sources`, `alerts`, `approvals` and `workflows` jump straight there. Any other text goes to the AI assistant
+(read-only: changes it proposes are left in its *WhatsApp chat* thread in the app for you to approve).
+
+- Setup: in *Settings → WhatsApp* paste the Meta **app secret**, tick *Answer messages* and save. Then in the Meta app under
+  WhatsApp → Configuration → Webhook enter the shown **Callback URL** (`<PUBLIC_BASE_URL>/api/v1/whatsapp/webhook`) and **Verify
+  token**, and subscribe to `messages`. The URL must be public HTTPS (use a tunnel such as ngrok or Cloudflare Tunnel for local testing).
+- Only verified admin numbers get replies; messages from others are ignored. Every message is checked against Meta's signature
+  (`X-Hub-Signature-256`, made with the app secret).
+- Actions run as that admin and are audited as `chat.<action>` with `via: whatsapp-chat`. Approving takes two taps and is bound to the
+  config hash you were shown; untick *Allow approving and rejecting from chat* to get a fix link instead.
+- Because you message first, replies need no templates for 24 hours. Delivery failures reported by Meta are written to the server log.
+
 Safety: a fix link (`/fix/<token>`) is random, stored only as a hash, valid for 24 hours and bound to the person it was sent to. It only
 says which alert to show: every action needs that person signed in with their own account and role, uses the same hash-bound approval
 as *Approvals*, and is audited as `fix.<action>` with `via: whatsapp-fix-link`. A forwarded link does nothing for anyone else.
@@ -850,6 +866,7 @@ All endpoints are under `/api/v1`. Interactive documentation is at `/docs`.
 | Monitoring | `GET /monitoring/metrics?hours=`, `GET /monitoring/failures`, `GET /repairs`, `GET /alerts`, `POST /alerts/{id}/ack`, `POST /alerts/ack-all`, `GET /audit?action=` |
 | Workflows | `GET/POST /workflows`, `POST /workflows/plan`, `GET/PUT/DELETE /workflows/{id}`, `POST /workflows/{id}/validate`, `/activate`, `/stop`, `/execute`, `GET /workflows/{id}/runs`, `POST /hooks/{id}` (signed webhook) |
 | Alert delivery | `GET/PUT /settings/notifications`, `POST /settings/notifications/test`, `GET/PUT /settings/whatsapp`, `GET/PATCH/DELETE /me/whatsapp`, `POST /me/whatsapp/code`, `/verify`, `/test` |
+| WhatsApp webhook | `GET /whatsapp/webhook` (Meta verification), `POST /whatsapp/webhook` (signed messages and delivery statuses) |
 | Fix links | `GET /fix/{token}`, `POST /fix/{token}/{approve,reject,retry,pause,resume,ack,mute,unmute}`; `GET /fix/{token}` outside `/api/v1` redirects into the app |
 | Demo | `GET /demo/state`, `POST /demo/drift` |
 | MCP | `POST /mcp` (outside `/api/v1`) |

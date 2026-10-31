@@ -256,6 +256,14 @@ function whatsappCard(w) {
         For reliable alerts create a <b>Utility</b> template with body <span class="mono">{{1}} — {{2}} Fix it: {{3}}</span>.
         Optionally add a URL button whose URL is <span class="mono">${esc(w.fix_url_prefix)}{{1}}</span> and tick the box above.
         For codes, create an <b>Authentication</b> template with a copy-code button.</p></details>
+    <h3 class="small muted" style="margin:16px 0 6px">CHATBOT</h3>
+    <label class="check"><input type="checkbox" name="chat_enabled" ${w.chat_enabled ? 'checked' : ''}> Answer messages: menus for integrations, sources, alerts, approvals and workflows, plus AI questions</label>
+    <label class="check small" style="margin-top:6px"><input type="checkbox" name="chat_approvals" ${w.chat_approvals ? 'checked' : ''}> Allow approving and rejecting from chat (two taps, bound to the reviewed config hash). Off = chat sends a fix link instead.</label>
+    <div class="field" style="margin-top:10px"><label>Meta app secret</label><input type="password" name="app_secret" autocomplete="new-password" placeholder="${w.has_app_secret ? 'saved — leave blank to keep' : 'App settings → Basic → App secret'}">
+      <div class="hint">Used to check that incoming messages really come from Meta. Only verified admin numbers get answers.</div></div>
+    ${w.verify_token ? `<div class="callout info small" style="margin-bottom:10px">In the Meta app: <b>WhatsApp → Configuration → Webhook</b>, set<br>
+      Callback URL <span class="mono">${esc(w.webhook_url)}</span><br>Verify token <span class="mono">${esc(w.verify_token)}</span><br>
+      then subscribe to the <span class="mono">messages</span> field. The URL must be public HTTPS (for local testing use a tunnel and set PUBLIC_BASE_URL to it).</div>` : ''}
     <div class="row between"><span class="small muted">${w.display_phone ? `Business number: <b>${esc(w.display_phone)}</b>${w.verified_name ? ` (${esc(w.verified_name)})` : ''}` : ''}</span>
       <div class="row">${w.configured ? '<button class="btn" id="check-wa">Check connection</button>' : ''}<button class="btn primary" id="save-wa">Save</button></div></div></div></div>`;
 }
@@ -296,6 +304,7 @@ function bindWhatsapp(el) {
     const d = formData($('#wa', el));
     const body = { ...d, phone_number_id: d.phone_number_id.trim(), alert_template: d.alert_template.trim(), otp_template: d.otp_template.trim(), template_lang: d.template_lang.trim() || 'en' };
     if (!d.access_token) delete body.access_token;
+    if (!d.app_secret) delete body.app_secret;
     const r = await api('/settings/whatsapp', { method: 'PUT', body });
     if (r.check_error) toast(`Saved, but the connection check failed: ${r.check_error}`, 'bad');
     else toast(r.display_phone ? `WhatsApp saved · connected to ${r.display_phone}` : 'WhatsApp saved', 'ok');

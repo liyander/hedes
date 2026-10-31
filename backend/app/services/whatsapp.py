@@ -100,7 +100,23 @@ def public_config(db: Session, org: Organization) -> dict:
             "alert_template": cfg.get("alert_template", ""), "template_lang": cfg.get("template_lang", "en"),
             "template_has_button": bool(cfg.get("template_has_button")), "otp_template": cfg.get("otp_template", ""),
             "display_phone": cfg.get("display_phone", ""), "verified_name": cfg.get("verified_name", ""),
-            "fix_url_prefix": f"{get_settings().public_base_url.rstrip('/')}/fix/", "recipients": count}
+            "fix_url_prefix": f"{get_settings().public_base_url.rstrip('/')}/fix/", "recipients": count,
+            "chat_enabled": bool(cfg.get("chat_enabled")), "chat_approvals": cfg.get("chat_approvals", True) is not False,
+            "has_app_secret": bool(cfg.get("app_secret_ref")), "verify_token": cfg.get("verify_token", ""),
+            "webhook_url": f"{get_settings().public_base_url.rstrip('/')}/api/v1/whatsapp/webhook"}
+
+
+def org_for_phone_number_id(db: Session, phone_number_id: str) -> Organization | None:
+    """The organisation whose WhatsApp business number received an inbound webhook."""
+    for org in db.scalars(select(Organization)).all():
+        if phone_number_id and config_of(org).get("phone_number_id") == phone_number_id:
+            return org
+    return None
+
+
+def app_secret(db: Session, org: Organization) -> str:
+    ref = config_of(org).get("app_secret_ref")
+    return ((vault.read_secret(db, ref, org.id) or {}).get("app_secret") or "") if ref else ""
 
 
 # ---------- sending ----------
@@ -149,6 +165,35 @@ def _post(db: Session, org: Organization, payload: dict) -> str:
     # Accepted is not delivered: Meta reports delivery later (a text outside the 24-hour window is silently dropped then).
     log.info("WhatsApp accepted a %s message to %s (%s)", payload.get("type"), mask_phone(payload.get("to", "")), msg_id)
     return msg_id
+
+
+def send_text(db: Session, org: Organization, phone: str, text: str) -> str:
+    return _post(db, org, {"to": phone, "type": "text", "text": {"preview_url": False, "body": text[:4096]}})
+
+
+def send_list(db: Session, org: Organization, phone: str, body: str, button: str, rows: list[dict], title: str = "Choose") -> str:
+    """An interactive list (max 10 rows). rows: [{"id", "title", "description"}]; WhatsApp limits titles to 24 and descriptions to 72 chars."""
+    rows = [{"id": r["id"][:200], "title": _clean(r["title"], 24), **({"description": _clean(r["description"], 72)} if r.get("description") else {})}
+            for r in rows[:10]]
+    return _post(db, org, {"to": phone, "type": "interactive", "interactive": {
+        "type": "list", "body": {"text": body[:1024]},
+        "action": {"button": _clean(button, 20), "sections": [{"title": _clean(title, 24), "rows": rows}]}}})
+
+
+def send_buttons(db: Session, org: Organization, phone: str, body: str, buttons: list[tuple[str, str]]) -> str:
+    """Up to 3 reply buttons: [(id, title)]; titles max 20 chars."""
+    if not buttons:
+        return send_text(db, org, phone, body)
+    return _post(db, org, {"to": phone, "type": "interactive", "interactive": {
+        "type": "button", "body": {"text": body[:1024]},
+        "action": {"buttons": [{"type": "reply", "reply": {"id": i[:256], "title": _clean(t, 20)}} for i, t in buttons[:3]]}}})
+
+
+def mark_read(db: Session, org: Organization, message_id: str) -> None:
+    try:
+        _call(db, org, "POST", "/messages", "read receipt", json={"messaging_product": "whatsapp", "status": "read", "message_id": message_id})
+    except WhatsAppError:
+        pass  # cosmetic only
 
 
 def check(db: Session, org: Organization) -> dict:
@@ -337,7 +382,7 @@ def context(db: Session, link: FixLink, p) -> dict:
         integ = None
     admin = p.at_least("admin")
     actions: list[dict] = []
-    out: dict = {"test": alert is None, "expires_at": link.expires_at.isoformat() + "Z", "actions": actions,
+    out: dict = {"test": alert is None and not link.integration_id, "expires_at": link.expires_at.isoformat() + "Z", "actions": actions,
                  "alert": None, "integration": None, "approval": None, "sources": [], "muted_until": None}
     if alert:
         out["alert"] = {"id": alert.id, "kind": alert.kind, "severity": alert.severity, "message": alert.message, "link": alert.link,
