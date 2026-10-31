@@ -4,7 +4,7 @@
   It has a "drift" switch that changes its response structure to demonstrate self-healing.
 * Notify - a team-alert API (API-key header auth).
 
-They are ordinary HTTP APIs; IntegraAI reaches them through the generic engine like any other service.
+They are ordinary HTTP APIs; H.E.D.E.S reaches them through the generic engine like any other service.
 """
 from __future__ import annotations
 

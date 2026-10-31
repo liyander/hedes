@@ -1,4 +1,4 @@
-"""The IntegraAI agents. Each agent is a function with a JSON-Schema output contract.
+"""The H.E.D.E.S agents. Each agent is a function with a JSON-Schema output contract.
 
 Every agent runs through the AI gateway, which picks a model per task. Each also has a deterministic
 local implementation (used by the built-in offline model and as a safety net). Agents only *propose*:
@@ -231,7 +231,7 @@ def analyze_request(gw: Gateway, messages: list[dict], documents: list[dict], pr
                            + ", ".join(o["id"] for o in v["integration"]["operations"]) for k, v in known.items())
     docs = "\n\n".join(wrap_document(d["name"], openapi.catalog_summary(d["catalog"])) for d in documents)
     convo = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages[-20:])
-    system = ("You are the Requirement Understanding Agent of IntegraAI, a zero-code integration platform. "
+    system = ("You are the Requirement Understanding Agent of H.E.D.E.S, a zero-code integration platform. "
               "Turn the conversation into structured integration requirements. Use the slug of a known service or of an "
               "uploaded document's title. For each operation set operation_id to an operation id that exists in the "
               "known services or documents. Ask for anything essential that is missing (documentation for unknown "
@@ -301,7 +301,7 @@ def generate_config(gw: Gateway, svc: dict, req: dict, documents: list[dict]) ->
     """Integration Architect + Configuration Generator. Returns (config, meta)."""
     draft, source = _draft_for_service(svc, req, documents)
     schema = config_generation_schema()
-    system = ("You are the Configuration Generator Agent of IntegraAI. Produce a declarative integration configuration "
+    system = ("You are the Configuration Generator Agent of H.E.D.E.S. Produce a declarative integration configuration "
               "that a generic HTTP engine will execute. Use only ${inputs.<name>} references in request templates, "
               "JSONPath ($.field) in response mappings, and never put credentials in the configuration - authentication "
               "is supplied at runtime from the connection named in credential_ref. Write clear operation descriptions.")
@@ -593,7 +593,7 @@ def plan_workflow(gw: Gateway, req: dict, tools: dict[str, dict]) -> tuple[dict,
 # --------------------------------------------------------------------------- error explanation
 
 def explain_error(gw: Gateway, tool_name: str, error_class: str, error: str, guide: tuple[str, str]) -> tuple[str, str]:
-    system = "You are the IntegraAI failure analyst. In 2-3 sentences explain the failure and the next step for a non-expert."
+    system = "You are the H.E.D.E.S failure analyst. In 2-3 sentences explain the failure and the next step for a non-expert."
     msg = f"Tool: {tool_name}\nError class: {error_class}\nDetail: {error[:400]}\nKnown guidance: {guide[0]} {guide[1]}"
     res = gw.text("error_explanation", system, [{"role": "user", "content": msg}], local=lambda: f"{guide[0]} {guide[1]}")
     return res.text, res.model

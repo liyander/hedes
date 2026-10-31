@@ -1,4 +1,4 @@
-# IntegraAI
+# H.E.D.E.S
 
 AI-assisted, configuration-driven, zero-code integration platform. Users describe an integration in plain
 language; AI agents read the API's documentation and produce a declarative configuration; deterministic code

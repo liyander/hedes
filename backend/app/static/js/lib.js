@@ -72,7 +72,7 @@ export function icon(name, size = 18, extra = '') {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}><path d="${ICONS[name] || ICONS.box}"/></svg>`;
 }
 
-export const LOGO = `<svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="8" cy="9" r="3.4"/><circle cx="24" cy="9" r="3.4"/><circle cx="16" cy="24" r="3.4"/><path d="M10.700 11.600 14.300 21M21.300 11.600 17.700 21M11.400 9h9.200"/></g></svg>`;
+export const LOGO = `<svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v24M26 4v24"/><path d="M10 12h12M19 8.500l3.500 3.500-3.500 3.500"/><path d="M22 21H10M13 17.500 9.500 21l3.500 3.500"/></g></svg>`;
 
 export function fmtTime(ts) {
   if (!ts) return '—';

@@ -65,7 +65,7 @@ export async function render({ el, params }) {
     log.innerHTML = session.messages.map((m) => m.role === 'system'
       ? `<div class="msg system"><div class="text">${icon('doc', 13)} ${esc(m.content)}</div></div>`
       : `<div class="msg ${m.role}"><div class="av">${m.role === 'user' ? 'You' : icon('spark', 15)}</div><div class="bubble">
-          <div class="meta">${m.role === 'user' ? 'You' : `IntegraAI${m.meta?.model ? ` · <span class="mono">${esc(m.meta.model)}</span>` : ''}`}</div>
+          <div class="meta">${m.role === 'user' ? 'You' : `H.E.D.E.S${m.meta?.model ? ` · <span class="mono">${esc(m.meta.model)}</span>` : ''}`}</div>
           <div class="text">${md(m.content)}</div></div></div>`).join('') +
       (session.status === 'running' ? `<div class="msg assistant"><div class="av">${icon('spark', 15)}</div><div class="bubble"><div class="text"><span class="spinner"></span> Working on ${esc(STAGE_LABEL[session.stage] || session.stage)}…</div></div></div>` : '');
     log.scrollTop = log.scrollHeight;

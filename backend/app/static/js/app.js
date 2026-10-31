@@ -41,7 +41,7 @@ function shell() {
   const u = state.user;
   return `<div class="shell" id="shell">
     <aside class="sidebar">
-      <a class="brand" href="#/dashboard">${LOGO}<div><b>Integra<span>AI</span></b><small>Zero-code integrations</small></div></a>
+      <a class="brand" href="#/dashboard">${LOGO}<div><b>H.E.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></a>
       <nav class="nav" id="nav">${NAV.map((g) => `${g.label ? `<div class="nav-label">${g.label}</div>` : ''}${g.items.map(([k, label, ic, cnt]) =>
         `<a href="#/${k}" data-nav="${k}">${icon(ic)}<span>${label}</span>${cnt ? `<span class="count warn" data-count="${cnt}" hidden></span>` : ''}</a>`).join('')}`).join('')}</nav>
       <div class="side-status"><a href="#/providers"><span class="dot on" id="ai-dot"></span><div class="ss-text"><b>AI gateway</b><small id="ai-route">checking…</small></div></a></div>
@@ -148,7 +148,7 @@ export async function route() {
   const key = ROUTES[parts[0]] ? parts[0] : 'dashboard';
   document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === key));
   $('#top-title').textContent = ROUTES[key][1];
-  document.title = `${ROUTES[key][1]} — IntegraAI`;
+  document.title = `${ROUTES[key][1]} — H.E.D.E.S`;
   if (matchMedia('(max-width: 820px)').matches) $('#shell').classList.remove('open');
   // A fresh element per route, so listeners a page attaches never outlive it.
   const el = $('#content').cloneNode(false);

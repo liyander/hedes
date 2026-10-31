@@ -1,4 +1,4 @@
-# IntegraAI architecture
+# H.E.D.E.S architecture
 
 ## Principle
 

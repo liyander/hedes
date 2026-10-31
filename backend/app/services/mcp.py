@@ -16,7 +16,7 @@ from ..models import Tool
 from . import runtime
 
 SUPPORTED_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]
-SERVER_INFO = {"name": "integra-ai", "version": "1.0.0"}
+SERVER_INFO = {"name": "hedes", "version": "1.0.0"}
 
 
 def mcp_name(tool: Tool) -> str:
@@ -48,7 +48,7 @@ def handle(db: Session, actor: runtime.Actor, msg: dict) -> dict | None:
         wanted = params.get("protocolVersion")
         return _result(id_, {"protocolVersion": wanted if wanted in SUPPORTED_VERSIONS else SUPPORTED_VERSIONS[-1],
                              "capabilities": {"tools": {"listChanged": False}}, "serverInfo": SERVER_INFO,
-                             "instructions": "Tools are approved IntegraAI integrations. Every call is authorised and audited."})
+                             "instructions": "Tools are approved H.E.D.E.S integrations. Every call is authorised and audited."})
     if method == "ping":
         return _result(id_, {})
     if method == "tools/list":

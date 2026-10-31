@@ -17,7 +17,7 @@ function card(form) {
 
 export function renderLogin(app) {
   app.innerHTML = card(`
-    <div class="brand">${LOGO}<div><b>Integra<span>AI</span></b></div></div>
+    <div class="brand">${LOGO}<div><b>H.E.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></div>
     <h1>Welcome back</h1>
     <p>Sign in to build, approve and run integrations.</p>
     <form id="login">
@@ -46,7 +46,7 @@ export function renderLogin(app) {
 
 export function renderInvite(app, token) {
   app.innerHTML = card(`
-    <div class="brand">${LOGO}<div><b>Integra<span>AI</span></b></div></div>
+    <div class="brand">${LOGO}<div><b>H.E.D.E.S</b><small>Hybrid Automated Data Exchange System</small></div></div>
     <h1>Join your team</h1>
     <p>Choose a username and password to accept the invitation.</p>
     <form id="inv">
