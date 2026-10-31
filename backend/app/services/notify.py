@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from ..core.config import get_settings
 from ..core.db import session_scope
 from ..models import Organization
-from . import egress, email_templates, vault, whatsapp
+from . import egress, email_templates, slack_bot, vault, whatsapp
 
 log = logging.getLogger("integra.notify")
 RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -153,6 +153,9 @@ def _dispatch(alerts: list[dict]) -> None:
                     res = send(db, org, mail["subject"], mail["text"], html=mail["html"], slack_text=f"{a['message']}\n{link}")
                 if a.get("id"):
                     res.update({f"whatsapp {k}": v for k, v in whatsapp.deliver(db, org, a).items()})
+                posted = slack_bot.post_alert(db, org, a)
+                if posted:
+                    res["slack alert channel"] = posted
                 for channel, outcome in res.items():
                     if outcome != "sent":
                         log.warning("alert delivery via %s failed: %s", channel, outcome)

@@ -366,6 +366,8 @@ function slackCard(s) {
         <pre id="manifest" style="max-height:180px">${esc(JSON.stringify(s.manifest, null, 2))}</pre></details>
       <div class="grid-2"><div class="field"><label>Bot User OAuth Token</label><input type="password" name="bot_token" autocomplete="new-password" placeholder="${s.configured ? 'saved - leave blank to keep' : 'xoxb-…'}"></div>
         <div class="field"><label>App-level token (connections:write)</label><input type="password" name="app_token" autocomplete="new-password" placeholder="${s.configured ? 'saved - leave blank to keep' : 'xapp-…'}"></div></div>
+      <div class="field"><label>Alert channel</label><input name="alert_channel" value="${esc(s.alert_channel || '')}" placeholder="C0123ABCD - leave blank for no channel" maxlength="40">
+        <p class="small muted" style="margin:4px 0 0">Every alert (failed runs, self-healing reports, credential and approval alerts) is posted here. Use the channel ID (channel name → About, at the bottom) and invite the app with <code>/invite @app</code>.</p></div>
       <div class="row between"><label class="check"><input type="checkbox" name="slack_enabled" ${s.enabled ? 'checked' : ''}> Enabled</label><button class="btn primary" id="save-slack">Save</button></div>
       <h3 class="small muted" style="margin:16px 0 6px">LINKED ADMINISTRATORS</h3>
       ${(s.links || []).length ? s.links.map((l) => `<div class="op-row small"><span class="grow"><b>${esc(l.username)}</b> <span class="muted mono">${esc(l.slack_user)}</span></span>
@@ -380,7 +382,7 @@ function wireSlack(el, s) {
     try { await navigator.clipboard.writeText(JSON.stringify(s.manifest, null, 2)); toast('Manifest copied', 'ok'); } catch (e) { toast('Select the manifest and copy it', 'bad'); }
   });
   $('#save-slack', el).addEventListener('click', async () => {
-    const body = { enabled: $('[name=slack_enabled]', root).checked };
+    const body = { enabled: $('[name=slack_enabled]', root).checked, alert_channel: $('[name=alert_channel]', root).value.trim() };
     const bot = $('[name=bot_token]', root).value.trim(), app = $('[name=app_token]', root).value.trim();
     if (bot) body.bot_token = bot;
     if (app) body.app_token = app;

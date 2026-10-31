@@ -16,6 +16,10 @@ class FakeSlack:
         self.calls.append({"token": token, "method": method, **body})
         if token == "xoxb-bad":
             raise slack_bot.SlackError("invalid_auth")
+        if method == "conversations.info":
+            return {"ok": True, "channel": {"id": body["channel"], "name": getattr(self, "names", {}).get(body["channel"], "")}}
+        if method == "conversations.replies":
+            return {"ok": True, "messages": [{"ts": body["ts"], "user": "UBOT", "text": getattr(self, "parent", "")}]}
         if method == "auth.test":
             return {"ok": True, "team": "hedes", "user": "hedes_bot", "user_id": "UBOT"}
         return {"ok": True, "ts": "9.9"}
@@ -87,9 +91,19 @@ def test_slack_channel_end_to_end(server, ai, slack):
     before = 0
     with session_scope() as db:
         before = db.query(Workflow).filter_by(organization_id=org).count()
-    ai.script = [{"reply": "I can create that workflow.", "tool_calls": [{"tool": "create_workflow", "why": "You asked for it",
-                  "args": {"description": "Notify the ops channel in Notify when run", "name": "Ops ping"}}]}]
+    # first the model forgets a required input: no buttons are offered, it is told what is missing and asks instead
+    ping = {"tool": "notify.send_message", "label": "Ping ops", "inputs": {"channel": "ops", "text": "Ping from H.E.D.E.S"}}
+    ai.script = [{"reply": "I can create that workflow.", "tool_calls": [{"tool": "create_workflow", "args": {
+                      "name": "Ops ping", "steps": [{"tool": "notify.send_message", "inputs": {"text": "Ping"}}]}}]},
+                 {"reply": "Which channel should I ping?"}]
     dm(org, "UADMIN", "create a workflow that pings ops in Notify", ts="1.1", thread_ts="1.1")
+    asked = slack.posts()[-1]
+    assert asked["text"] == "Which channel should I ping?" and not asked.get("blocks")
+    assert "NOT proposed" in ai.prompts[-1] and "missing the required input 'channel'" in ai.prompts[-1]
+
+    ai.script = [{"reply": "I can create that workflow.", "tool_calls": [{"tool": "create_workflow", "why": "You asked for it",
+                  "args": {"description": "Notify the ops channel in Notify when run", "name": "Ops ping", "steps": [ping]}}]}]
+    dm(org, "UADMIN", "the ops channel", ts="1.2", thread_ts="1.1")
     buttons = slack.posts()[-1]
     assert buttons["blocks"][1]["elements"][0]["action_id"] == "hedes_approve"
     act_id = buttons["blocks"][1]["elements"][0]["value"]
@@ -123,6 +137,7 @@ def test_slack_channel_end_to_end(server, ai, slack):
 def test_markdown_becomes_slack_mrkdwn():
     out = slack_bot.mrkdwn("**Done**: see [the docs](https://x.io) and #/workflows/abc")
     assert out.startswith("*Done*: see <https://x.io|the docs> and <") and "/#/workflows/abc|open in H.E.D.E.S>" in out
+    assert slack_bot.mrkdwn("visit the [Workflows](/#/workflows) page").endswith("/#/workflows|Workflows> page")
 
 
 def test_socket_mode_acknowledges_envelopes_and_reconnects(monkeypatch):
@@ -201,3 +216,100 @@ def test_the_bot_tokens_app_is_looked_up(monkeypatch):
     assert slack_bot.bot_app_id("xoxb-x") == "A_BOT"
     monkeypatch.setattr(slack_bot, "call", lambda token, method, **b: (_ for _ in ()).throw(slack_bot.SlackError("missing_scope")))
     assert slack_bot.bot_app_id("xoxb-x") == ""                        # without users:read the check is skipped, not fatal
+
+
+def test_channel_mentions_reach_the_model_with_their_id(server, ai, slack):
+    admin = login(server, "admin")
+    org = admin.get("/api/v1/auth/me").json()["organization"]["id"]
+    admin.put("/api/v1/settings/slack", json={"enabled": True, "bot_token": "xoxb-good", "app_token": "xapp-1-good"})
+    code = admin.post("/api/v1/settings/slack/link-code").json()["code"]
+    dm(org, "UADMIN", f"link {code}", ts="5.0")
+    ai.script = [{"reply": "Noted."}]
+    dm(org, "UADMIN", "post failures to <#C0CDMS322QM|failures>", ts="5.1")
+    assert "#failures (existing Slack channel, ID C0CDMS322QM)" in ai.prompts[-1]
+    # Slack often sends a mention without its name: the name is looked up, so the model never sees a bare ID
+    slack.names = {"C0CDMS322QM": "failures"}
+    ai.script = [{"reply": "I'll post alerts to C0CDMS322QM.", "tool_calls": [{"tool": "set_alert_channel", "args": {"channel": "C0CDMS322QM"}}]}]
+    dm(org, "UADMIN", "send all failures to <#C0CDMS322QM|>", ts="5.2")
+    assert "#failures (existing Slack channel, ID C0CDMS322QM)" in ai.prompts[-1]
+    reply, card = slack.posts()[-2:]
+    assert reply["text"].endswith("<#C0CDMS322QM>.")                                    # Slack renders it as #failures
+    assert "<#C0CDMS322QM> (existing channel)" in card["blocks"][0]["text"]["text"]
+    admin.put("/api/v1/settings/slack", json={"enabled": False})
+
+
+def test_alerts_are_posted_to_the_alert_channel(server, slack):
+    admin = login(server, "admin")
+    assert admin.put("/api/v1/settings/slack", json={"enabled": True, "bot_token": "xoxb-good", "app_token": "xapp-1-good",
+                                                     "alert_channel": "#failures"}).status_code == 422
+    v = admin.put("/api/v1/settings/slack", json={"enabled": True, "alert_channel": "C0CDMS322QM"}).json()
+    assert v["alert_channel"] == "C0CDMS322QM"
+    with session_scope() as db:
+        org = db.get(Organization, admin.get("/api/v1/auth/me").json()["organization"]["id"])
+        assert slack_bot.post_alert(db, org, {"kind": "execution_failure", "severity": "high", "message": "github.list_issues failed: 401"}) == "sent"
+    post = slack.posts()[-1]
+    assert post["channel"] == "C0CDMS322QM" and "github.list_issues failed: 401" in post["text"]
+    admin.put("/api/v1/settings/slack", json={"enabled": False, "alert_channel": ""})
+
+
+def channel_msg(org_id, user, text, ts, thread_ts=None, parent_user=None):
+    ev = {"type": "message", "channel_type": "channel", "channel": "CFAIL", "user": user, "text": text, "ts": ts}
+    if thread_ts:
+        ev.update(thread_ts=thread_ts, parent_user_id=parent_user)
+    slack_bot.handle_envelope(org_id, {"type": "events_api", "envelope_id": "e", "payload": {"event": ev}})
+
+
+def test_replies_under_an_alert_discuss_it_and_apply_the_fix(server, ai, slack):
+    admin = login(server, "admin")
+    org = admin.get("/api/v1/auth/me").json()["organization"]["id"]
+    admin.put("/api/v1/settings/slack", json={"enabled": True, "bot_token": "xoxb-good", "app_token": "xapp-1-good"})
+    dm(org, "UADMIN", f"link {admin.post('/api/v1/settings/slack/link-code').json()['code']}", ts="6.0")
+    graph = {"trigger": {"type": "manual"}, "nodes": [{"id": "ping", "tool": "notify.send_message", "inputs": {"channel": "ops"}}]}
+    wf = admin.post("/api/v1/workflows", json={"name": "Broken ping", "graph": graph}).json()
+    assert not wf["validation"]["valid"]                                             # text is missing
+
+    posted = len(slack.posts())
+    channel_msg(org, "UADMIN", "unrelated chatter", ts="7.0")                       # channel talk is not for the bot
+    channel_msg(org, "UADMIN", "a reply under someone else's message", ts="7.2", thread_ts="7.1", parent_user="UOTHER")
+    assert len(slack.posts()) == posted
+
+    slack.parent = "H.E.D.E.S Alert: workflow Broken ping failed: inputs: 'text' is a required property"
+    ai.script = [{"reply": "Broken ping is missing its text.", "tool_calls": [{"tool": "update_workflow", "args": {
+        "workflow_id": wf["id"], "steps": {"ping": {"inputs": {"text": "Ping from H.E.D.E.S"}}}}}]}]
+    channel_msg(org, "UADMIN", "fix this using the text Ping from H.E.D.E.S", ts="8.1", thread_ts="8.0", parent_user="UBOT")
+    assert "Broken ping failed" in ai.prompts[-1] and "untrusted_document" in ai.prompts[-1]
+    reply, card = slack.posts()[-2:]
+    assert reply["channel"] == "CFAIL" and reply["thread_ts"] == "8.0" and card["blocks"][1]["elements"][0]["action_id"] == "hedes_approve"
+
+    ai.script = []
+    slack_bot.handle_envelope(org, {"type": "interactive", "payload": {
+        "type": "block_actions", "user": {"id": "UADMIN"}, "actions": [{"action_id": "hedes_approve", "value": card["blocks"][1]["elements"][0]["value"]}],
+        "container": {"channel_id": "CFAIL", "message_ts": "8.2"}, "message": {"ts": "8.2", "thread_ts": "8.0"}}})
+    after = admin.get(f"/api/v1/workflows/{wf['id']}").json()
+    assert after["graph"]["nodes"][0]["inputs"] == {"channel": "ops", "text": "Ping from H.E.D.E.S"} and after["validation"]["valid"]
+
+    ai.script = [{"reply": "It is fixed now."}]
+    channel_msg(org, "UADMIN", "thanks, is it valid now?", ts="8.3", thread_ts="8.0", parent_user="UBOT")  # the thread continues
+    assert slack.posts()[-1]["text"] == "It is fixed now."
+
+    # "run and test it": a real run whose result (each step and what it returned) comes back to the model
+    def approve(card, ts):
+        slack_bot.handle_envelope(org, {"type": "interactive", "payload": {
+            "type": "block_actions", "user": {"id": "UADMIN"}, "actions": [{"action_id": "hedes_approve", "value": card["blocks"][1]["elements"][0]["value"]}],
+            "container": {"channel_id": "CFAIL", "message_ts": ts}, "message": {"ts": ts, "thread_ts": "8.0"}}})
+    ai.script = [{"reply": "Running it now.", "tool_calls": [{"tool": "run_workflow", "args": {"workflow_id": wf["id"], "dry_run": False}}]}]
+    channel_msg(org, "UADMIN", "run and test it", ts="8.4", thread_ts="8.0", parent_user="UBOT")
+    ai.script = [{"reply": "The run succeeded: step ping delivered the message."}]
+    approve(slack.posts()[-1], "8.5")
+    # earlier tests may have broken the Notify integration on purpose, so the run's outcome varies: what matters is
+    # that the model sees each step, what it sent and what came back
+    assert '"dry_run": false' in ai.prompts[-1] and '"node": "ping"' in ai.prompts[-1] and '"text": "Ping from H.E.D.E.S"' in ai.prompts[-1]
+    assert slack.posts()[-1]["text"] == "The run succeeded: step ping delivered the message."
+
+    ai.script = [{"reply": "Activating it.", "tool_calls": [{"tool": "set_workflow_status", "args": {"workflow_id": wf["id"], "active": True}}]}]
+    channel_msg(org, "UADMIN", "activate it", ts="8.6", thread_ts="8.0", parent_user="UBOT")
+    ai.script = [{"reply": "It is active."}]
+    approve(slack.posts()[-1], "8.7")
+    assert admin.get(f"/api/v1/workflows/{wf['id']}").json()["status"] == "active"
+    admin.post(f"/api/v1/workflows/{wf['id']}/stop")
+    admin.put("/api/v1/settings/slack", json={"enabled": False})

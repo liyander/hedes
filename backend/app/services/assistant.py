@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from ..core.db import utcnow
 from ..core.security import Principal
 from ..models import (AIMessage, AISession, AssistantAction, AssistantMessage, AssistantThread, Connection, DeadLetter, Execution,
-                      HealingCase, IngestRun, IngestSource, Integration, IntegrationVersion, NormalizedEvent, Tool, Workflow, WorkflowRun,
+                      HealingCase, IngestRun, IngestSource, Integration, IntegrationVersion, NormalizedEvent, Organization, Tool, Workflow, WorkflowRun,
                       WorkflowStep, WorkflowVersion)
 from . import audit, catalog, help_content, ingest, integrations, monitoring, runtime
 from .ai_gateway import Gateway, ProviderError, wrap_document
@@ -68,10 +68,23 @@ TOOLS: dict[str, tuple[bool, str, tuple, str]] = {
     "list_healing_cases": (False, "user", (), "Self-healing investigations: target, status, root cause and what is required. args: status."),
     "get_healing_case": (False, "user", ("id",), "One self-healing case: root cause, every fix tried and its result, what is still failing, what an admin must do."),
     "get_workflow": (False, "user", ("id",), "One workflow: trigger, steps (tool, inputs, conditions), validation and recent runs."),
-    "create_workflow": (True, "user", ("description",), "Draft a new workflow from a plain-language description using published tools. "
-                        "args: description, name. It is created as an inactive draft to review in Workflows."),
-    "run_workflow": (True, "user", ("workflow_id",), "Run a workflow now with its sample trigger payload. args: workflow_id, dry_run (default true: render "
-                     "requests without calling any API; false runs it for real)."),
+    "create_workflow": (True, "user", ("name", "steps"), "Create an inactive draft workflow from steps you have fully specified. args: name, "
+                        "description, trigger ({type: manual|webhook|schedule|automatic, interval_minutes (schedule), event (automatic: failure|alert|record), "
+                        "conditions (automatic: [{left: '${trigger.<field>}', op: eq|neq|contains|in|gt|lt|exists, right}]), description}), steps ([{tool, label, "
+                        "inputs}] in run order; each step runs after the previous one, and an input may use ${trigger.<field>} or "
+                        "${steps.step<N>.output.<field>}). Every required input of every tool needs a concrete value."),
+    "update_workflow": (True, "user", ("workflow_id",), "Change an existing workflow (saved as a new version; an active workflow stays "
+                        "active if it still validates). args: workflow_id, steps ({<step id>: {inputs: {<name>: value} merged into the step's "
+                        "inputs, label}}), trigger (fields replacing the trigger's: type, event, conditions, interval_minutes), name. "
+                        "Look at it first with get_workflow and use its step ids."),
+    "set_alert_channel": (True, "admin", ("channel",), "Post every H.E.D.E.S alert (failed runs, self-healing reports, credential and "
+                          "approval alerts) to an EXISTING Slack channel through the connected Slack app (nothing is created). args: channel (channel ID like C0123ABCD; "
+                          "'' turns it off)."),
+    "run_workflow": (True, "user", ("workflow_id",), "Run a workflow now with its sample trigger payload (works for drafts too). args: workflow_id, "
+                     "dry_run (true: render every request without calling any API; false: run it for real). The result has each step's "
+                     "status, inputs and returned data. 'Test it' = dry_run true; 'run it' / 'run and test it' = dry_run false."),
+    "set_workflow_status": (True, "user", ("workflow_id", "active"), "Activate (active: true) or pause (active: false) a workflow, so "
+                            "automatic and scheduled triggers start it. It must validate first."),
     "investigate_failure": (True, "user", ("execution_id",), "Start a self-healing investigation of one failed execution: trace the root cause and try safe fixes."),
     "request_credential": (False, "user", ("name", "auth_type"), "Show the user a secure form to connect a credential (you never see the secret). "
                            "args: name (the integration's credential_ref), auth_type, header_name (optional), template_id (optional, adds the provider's instructions)."),
@@ -100,6 +113,23 @@ How you work:
   Items the user tagged are already summarised under TAGGED CONTEXT; use tools only for more detail.
 - To change anything or call an external service, call an action tool. The user sees the action and must approve it before it runs.
   Never claim an action has happened until you are told it executed. Propose only what the user asked for.
+- Propose an action only once you have every value it needs (list_tools shows each tool's required inputs). If a value is
+  missing or ambiguous - a channel, project, repository, recipient, schedule - ask the user for it, say how to find it, and wait.
+  Never fill required inputs with placeholders or invented values such as "Hello from workflow!".
+- Workflows start manually, from a webhook, on a schedule, or automatically on a H.E.D.E.S event with optional conditions:
+  failure (fields: source tool|data_source|workflow, tool, integration, error_class, http_status, error, workflow, link),
+  alert (kind, severity, message, link) or record (a new data-source event: source, title, severity, category, event_type,
+  timestamp, description). "Send every failure to Slack" is an automatic workflow on failure whose step posts ${trigger.error};
+  set_alert_channel is the simpler alternative for all alerts. Automatic workflows run once activated in Workflows.
+- A message may start with the alert or message a Slack thread is about. Treat it as the subject: find the failing item
+  (list_failures, list_workflows, get_workflow, get_integration), explain the cause, and when the user tells you how to fix it,
+  propose the change (update_workflow, fix_integration, ...) with the concrete values they gave.
+- After an action runs you see its result. For a workflow run, report each step's outcome and the key data it returned (counts,
+  ids, titles); on a failure, explain the cause from the step error and propose the fix. Do not send people to a page for
+  something an action can do (run_workflow, set_workflow_status, update_workflow).
+- Slack channel inputs take the channel ID (like C0123ABCD), never "#name". A message mentioning #failures shows its ID.
+  These channels already exist: never offer to create one. Write a channel as <#C0123ABCD> so Slack shows its name.
+  The Slack app must be invited to the channel (/invite @app) before it can post there.
 - You cannot approve or publish integrations, rotate or reveal secrets, or change policy. If asked, explain who can (an administrator).
 - Never ask the user to paste secrets into chat. When a credential is needed, call request_credential with the integration's
   credential_ref and auth type: the user gets a secure form whose secret goes straight to the vault (env:NAME also works).
@@ -465,25 +495,45 @@ def execute_action(db: Session, p: Principal, act: AssistantAction) -> Any:
         db.commit()
         orchestrator.handle_message(db, s, str(a["message"])[:8000])
         return {"session_id": s.id, "open": f"#/studio/{s.id}"}
+    if name == "set_alert_channel":
+        from . import slack_bot
+        problems = precheck(db, p, {"tool": name, "args": a})
+        if problems:
+            raise HTTPException(422, "; ".join(problems))
+        org = db.get(Organization, p.org_id)
+        cfg = slack_bot.config_of(org)
+        cfg["alert_channel"] = str(a["channel"]).strip()
+        slack_bot.save_config(db, org, cfg)
+        audit.record(db, p.org_id, p, "settings.slack", org.name, alert_channel=cfg["alert_channel"], source="assistant")
+        return {"alert_channel": cfg["alert_channel"] or "off"}
     if name == "create_workflow":
-        from . import agents, workflows as wf_mod
-        actor = runtime.Actor(p.id, p.role, p.org_id, "user", p.user.username)
-        tools = wf_mod.tool_catalog(db, actor)
-        if not tools:
-            raise HTTPException(409, "There are no published tools yet - publish an integration first")
-        desc = str(a["description"])[:4000]
-        graph, model = agents.plan_workflow(Gateway(db, p.org_id), agents.requirements_from_tools(desc, tools), tools)
-        w = Workflow(organization_id=p.org_id, name=str(a.get("name") or desc.split(".")[0])[:160], description=desc, created_by=p.id)
+        problems = precheck(db, p, {"tool": name, "args": a})
+        if problems:
+            raise HTTPException(422, "; ".join(problems))
+        graph = workflow_graph(a)
+        desc = str(a.get("description") or "")[:4000]
+        w = Workflow(organization_id=p.org_id, name=str(a["name"])[:160], description=desc, created_by=p.id)
         db.add(w)
         db.flush()
         v = WorkflowVersion(workflow_id=w.id, version=1, graph=graph, created_by=p.id)
         db.add(v)
         db.flush()
         w.current_version_id = v.id
+        from . import workflows as wf_mod
         check = wf_mod.validate(db, w, graph)
         audit.record(db, p.org_id, p, "workflow.create", w.name, source="assistant")
         return {"workflow_id": w.id, "name": w.name, "steps": [f"{n['id']}: {n['tool']}" for n in graph.get("nodes") or []],
                 "valid": check["valid"], "problems": [e["message"] for e in check["errors"] + check["warnings"]][:5], "open": f"#/workflows/{w.id}"}
+    if name == "update_workflow":
+        from . import workflows as wf_mod
+        w, graph = updated_workflow_graph(db, p, a)
+        if a.get("name"):
+            w.name = str(a["name"])[:160]
+        n = wf_mod.save_version(db, w, graph, p.id)
+        audit.record(db, p.org_id, p, "workflow.update", w.name, version=n, source="assistant")
+        check = wf_mod.validate(db, w, graph)
+        return {"workflow_id": w.id, "name": w.name, "version": n, "status": w.status, "valid": check["valid"],
+                "problems": [e["message"] for e in check["errors"] + check["warnings"]][:5], "open": f"#/workflows/{w.id}"}
     if name == "run_workflow":
         from . import workflows as wf_mod
         w = db.get(Workflow, str(a["workflow_id"]))
@@ -494,8 +544,28 @@ def execute_action(db: Session, p: Principal, act: AssistantAction) -> Any:
         v = db.get(WorkflowVersion, w.current_version_id)
         run = wf_mod.execute(db, w, "manual", (v.graph.get("trigger") or {}).get("sample") or {}, dry_run=a.get("dry_run", True) is not False)
         steps = db.scalars(select(WorkflowStep).where(WorkflowStep.run_id == run.id)).all()
-        return {"status": run.status, "dry_run": run.dry_run, "error": run.error,
-                "steps": [{"node": s.node_id, "status": s.status, "error": s.error[:200]} for s in steps]}
+        # what each step sent and got back, so the result can be reported (a dry run shows the request it would send)
+        return {"run_id": run.id, "status": run.status, "dry_run": run.dry_run, "error": run.error, "open": f"#/workflows/{w.id}",
+                "steps": [{"node": s.node_id, "status": s.status, "error": s.error[:300],
+                           "inputs": (s.output or {}).get("inputs"), "result": _trim((s.output or {}).get("result"), 1500)} for s in steps]}
+    if name == "set_workflow_status":
+        from . import workflows as wf_mod
+        w = db.get(Workflow, str(a["workflow_id"]))
+        if not w or w.organization_id != p.org_id:
+            raise HTTPException(404, "Workflow not found")
+        if w.created_by != p.id and not p.at_least("admin"):
+            raise HTTPException(403, "Only the workflow's owner or an administrator can change it")
+        if a.get("active") is False:
+            w.status = "paused"
+        else:
+            v = db.get(WorkflowVersion, w.current_version_id)
+            if (v.graph.get("trigger") or {}).get("type") == "webhook" and not w.webhook_secret_ref:
+                raise HTTPException(409, "A webhook workflow is activated on the Workflows page, which shows its signing secret once")
+            wf_mod.activate(db, w)
+        audit.record(db, p.org_id, p, "workflow.activate" if w.status == "active" else "workflow.pause", w.name, source="assistant")
+        trig = (db.get(WorkflowVersion, w.current_version_id).graph.get("trigger") or {})
+        return {"workflow_id": w.id, "name": w.name, "status": w.status, "trigger": trig.get("type"), "event": trig.get("event"),
+                "open": f"#/workflows/{w.id}"}
     if name == "investigate_failure":
         from . import healing
         ex = db.get(Execution, str(a["execution_id"]))
@@ -598,6 +668,100 @@ def _validate_calls(data: Any) -> list[str]:
     return problems
 
 
+SLACK_CHANNEL_ID = re.compile(r"[CG][A-Z0-9]{6,20}")
+
+
+def workflow_graph(a: dict) -> dict:
+    """The graph for create_workflow: the steps run in the order given, each after the previous one."""
+    from . import automation
+    trig = a.get("trigger") if isinstance(a.get("trigger"), dict) else {}
+    trigger = {"type": trig.get("type") if trig.get("type") in ("manual", "webhook", "schedule", "automatic") else "manual",
+               "description": str(trig.get("description") or "Run manually")[:300], "sample": {}}
+    if trigger["type"] == "schedule":
+        trigger["interval_minutes"] = trig.get("interval_minutes") or 60
+    if trigger["type"] == "automatic":
+        trigger["event"] = trig.get("event")
+        trigger["sample"] = dict(automation.SAMPLES.get(trig.get("event"), {}))
+        if trig.get("conditions"):
+            trigger["conditions"] = trig["conditions"]
+    nodes = []
+    for i, s in enumerate(a.get("steps") or []):
+        node = {"id": f"step{i + 1}", "label": str(s.get("label") or s.get("tool"))[:120], "tool": s.get("tool"),
+                "inputs": s.get("inputs") or {}, "on_failure": "stop"}
+        if nodes:
+            node["depends_on"] = [nodes[-1]["id"]]
+        nodes.append(node)
+    return {"trigger": trigger, "nodes": nodes}
+
+
+def _missing_inputs(tool: dict, inputs: Any) -> list[str]:
+    inputs = inputs if isinstance(inputs, dict) else {}
+    return [r for r in ((tool.get("input_schema") or {}).get("required") or []) if inputs.get(r) in (None, "", [], {})]
+
+
+def updated_workflow_graph(db: Session, p: Principal, a: dict) -> tuple[Workflow, dict]:
+    """The workflow named by update_workflow and its graph with the requested changes applied (nothing is saved)."""
+    import copy
+    w = db.get(Workflow, str(a.get("workflow_id", "")))
+    if not w or w.organization_id != p.org_id:
+        raise HTTPException(404, "Workflow not found - use list_workflows for its id")
+    if w.created_by != p.id and not p.at_least("admin"):
+        raise HTTPException(403, "Only the workflow's owner or an administrator can change it")
+    graph = copy.deepcopy(db.get(WorkflowVersion, w.current_version_id).graph)
+    nodes = {n["id"]: n for n in graph.get("nodes") or []}
+    steps = a.get("steps") if isinstance(a.get("steps"), dict) else {}
+    for sid, change in steps.items():
+        if sid not in nodes:
+            raise HTTPException(422, f"Step {sid!r} does not exist; the steps are {', '.join(nodes)}")
+        change = change if isinstance(change, dict) else {}
+        nodes[sid]["inputs"] = {**(nodes[sid].get("inputs") or {}), **(change.get("inputs") or {})}
+        if change.get("label"):
+            nodes[sid]["label"] = str(change["label"])[:120]
+    if isinstance(a.get("trigger"), dict):
+        graph["trigger"] = {**graph.get("trigger", {}), **a["trigger"]}
+    if not steps and not a.get("trigger") and not a.get("name"):
+        raise HTTPException(422, "Nothing to change: give steps, trigger or name")
+    return w, graph
+
+
+def precheck(db: Session, p: Principal, call: dict) -> list[str]:
+    """What stops an action from being proposed: an unknown tool, a missing required value, an invalid workflow.
+    Checked before the person is offered an Approve button, so they never approve something that cannot work."""
+    a, name = call.get("args") or {}, call["tool"]
+    if name in ("create_workflow", "run_tool"):
+        tools = {t.name: {"input_schema": t.input_schema} for t in runtime.visible_tools(db, runtime.Actor(p.id, p.role, p.org_id, "user", p.user.username))}
+        steps = a.get("steps") if name == "create_workflow" else [{"tool": a.get("tool"), "inputs": a.get("inputs")}]
+        if not isinstance(steps, list) or not steps:
+            return ["steps is empty: list each step's tool and inputs"]
+        problems = []
+        for i, s in enumerate(steps, 1):
+            s = s if isinstance(s, dict) else {}
+            where = f"step {i} ({s.get('tool')})" if name == "create_workflow" else str(s.get("tool"))
+            if s.get("tool") not in tools:
+                problems.append(f"{where} is not a published tool you may run")
+                continue
+            problems += [f"{where} is missing the required input {r!r}" for r in _missing_inputs(tools[s["tool"]], s.get("inputs"))]
+            for k, v in (s.get("inputs") or {}).items():
+                if k == "channel" and s["tool"].startswith("slack") and isinstance(v, str) and not SLACK_CHANNEL_ID.fullmatch(v):
+                    problems.append(f"{where}: channel must be a Slack channel ID such as C0123ABCD, not {v!r}")
+        if name == "create_workflow" and not problems:
+            from .validation import validate_workflow_graph
+            problems += [e["message"] for e in validate_workflow_graph(workflow_graph(a), tools)["errors"]]
+        return problems
+    if name == "update_workflow":
+        from . import workflows as wf_mod
+        try:
+            w, graph = updated_workflow_graph(db, p, a)
+        except HTTPException as e:
+            return [str(e.detail)]
+        check = wf_mod.validate(db, w, graph)
+        return [e["message"] for e in check["errors"]]
+    if name == "set_alert_channel":
+        ch = str(a.get("channel", "")).strip()
+        return [] if ch == "" or SLACK_CHANNEL_ID.fullmatch(ch) else [f"channel must be a Slack channel ID such as C0123ABCD, not {ch!r}"]
+    return []
+
+
 def _transcript(db: Session, thread: AssistantThread) -> str:
     msgs = db.scalars(select(AssistantMessage).where(AssistantMessage.thread_id == thread.id).order_by(AssistantMessage.created_at.desc()).limit(HISTORY)).all()
     lines = []
@@ -606,7 +770,7 @@ def _transcript(db: Session, thread: AssistantThread) -> str:
         body = m.content
         if m.role == "assistant":
             for a in db.scalars(select(AssistantAction).where(AssistantAction.message_id == m.id)).all():
-                body += f"\n[proposed action {a.tool} {json.dumps(a.args)[:300]} -> {a.status}" + (f", result {json.dumps(a.result)[:600]}" if a.result else "") + (f", error {a.error[:200]}" if a.error else "") + "]"
+                body += f"\n[proposed action {a.tool} {json.dumps(a.args)[:300]} -> {a.status}" + (f", result {json.dumps(a.result, default=str)[:2000]}" if a.result else "") + (f", error {a.error[:200]}" if a.error else "") + "]"
         lines.append(f"{who}: {body}")
     return "\n\n".join(lines)
 
@@ -651,7 +815,7 @@ def _respond(db: Session, p: Principal, thread: AssistantThread, gw: Gateway, pa
     looked_up: list[dict] = []
     scratch = ""
     result = None
-    for _ in range(MAX_ROUNDS):
+    for round_no in range(MAX_ROUNDS):
         prompt = f"CONVERSATION\n{transcript}\n" + (f"\nTOOL RESULTS THIS TURN\n{scratch}\n" if scratch else "") + "\nNow respond as the assistant."
         try:
             result = gw.structured("assistant", system, prompt, RESPONSE_SCHEMA, local=lambda: {"reply": ""}, validate_extra=_validate_calls, allow_local=False)
@@ -669,9 +833,20 @@ def _respond(db: Session, p: Principal, thread: AssistantThread, gw: Gateway, pa
                 looked_up.append({"tool": c["tool"], "args": c.get("args") or {}})
                 scratch += f"\n{c['tool']}({json.dumps(c.get('args') or {})[:200]}) ->\n" + wrap_document(c["tool"], json.dumps(out, default=str), 6000) + "\n"
             continue
+        blocked = [(c, pr) for c in writes if (pr := precheck(db, p, c))]
+        if blocked and round_no < MAX_ROUNDS - 1:
+            for c, pr in blocked:
+                scratch += (f"\n{c['tool']} was NOT proposed: {'; '.join(pr)}. Do not propose it again until every value is known: "
+                            "ask the user for what is missing (say how to find it) or correct the arguments.\n")
+            continue
         break
     data = result.data
     calls = [c for c in (data.get("tool_calls") or []) if TOOLS[c["tool"]][0]]
+    dropped = [c for c in calls if precheck(db, p, c)]
+    if dropped:  # still incomplete on the last round: no Approve button for something that cannot run
+        calls = [c for c in calls if c not in dropped]
+        data = {**data, "reply": (data.get("reply") or "") + "\n\nI still need more details before I can propose "
+                + ", ".join(f"`{c['tool']}`" for c in dropped) + ": " + "; ".join(precheck(db, p, dropped[0])) + "."}
     cred_requests = [r for r in (credential_request(c.get("args") or {}) for c in (data.get("tool_calls") or []) if c["tool"] == "request_credential") if r][:2]
     meta = {"model": result.model, "looked_up": looked_up, "page": page or ""}
     if cred_requests:
@@ -751,7 +926,7 @@ def follow_up(db: Session, p: Principal, thread: AssistantThread, act: Assistant
     """After an action ran (or was rejected) let the model report back, so the user does not have to ask."""
     note = AssistantMessage(thread_id=thread.id, role="system", meta={"action_id": act.id},
                             content=f"The user {'approved' if act.status != 'rejected' else 'rejected'} the action {act.tool}. Outcome: {act.status}."
-                                    + (f" Result: {json.dumps(act.result, default=str)[:1500]}" if act.result else "") + (f" Error: {act.error}" if act.error else ""))
+                                    + (f" Result: {json.dumps(act.result, default=str)[:6000]}" if act.result else "") + (f" Error: {act.error}" if act.error else ""))
     db.add(note)
     db.commit()
     try:

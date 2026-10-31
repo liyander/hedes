@@ -33,7 +33,11 @@ def after_execution(db: Session, ex: Execution, integ: Integration) -> bool:
     """Raise alerts for failures. Returns True when an automatic repair proposal should be prepared."""
     if ex.status == "succeeded":
         return False
-    from . import healing
+    from . import automation, healing
+    automation.emit(db, ex.organization_id, "failure", {
+        "source": "data_source" if ex.actor_type == "ingest" else "tool", "tool": ex.tool_name, "integration": integ.name,
+        "integration_id": integ.id, "error_class": ex.error_class, "http_status": ex.http_status, "error": (ex.error or "")[:1000],
+        "workflow": "", "execution_id": ex.id, "actor_type": ex.actor_type, "link": f"#/monitoring/execution/{ex.id}"})
     healing.on_failure(db, ex, integ)  # no-op unless self-healing is enabled; investigates after this transaction commits
     cls = ex.error_class
     if cls in ("auth_invalid", "forbidden", "credential_missing") and not _recent_alert(db, ex.organization_id, cls, integ.id):

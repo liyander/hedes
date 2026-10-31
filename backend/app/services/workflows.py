@@ -11,24 +11,48 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..core.db import session_scope, utcnow
 from ..models import Membership, WebhookDelivery, Workflow, WorkflowRun, WorkflowStep, WorkflowVersion
-from . import audit, engine, runtime, templates, vault
+from . import audit, automation, engine, runtime, templates, vault
 from .validation import topo_layers, validate_workflow_graph
 
 log = logging.getLogger("integra.workflows")
 SIGNATURE_TOLERANCE_S = 300
 
 
-def owner_actor(db: Session, wf: Workflow) -> runtime.Actor:
+def owner_actor(db: Session, wf: Workflow, automatic: bool = False) -> runtime.Actor:
     m = db.scalars(select(Membership).where(Membership.user_id == wf.created_by, Membership.organization_id == wf.organization_id)).first()
     if not m:
         raise HTTPException(409, "The workflow owner is no longer a member of this organisation")
-    return runtime.Actor(m.user_id, m.role, wf.organization_id, "workflow", f"workflow:{wf.name[:40]}")
+    return runtime.Actor(m.user_id, m.role, wf.organization_id, automation.AUTOMATIC_ACTOR if automatic else "workflow", f"workflow:{wf.name[:40]}")
+
+
+def save_version(db: Session, wf: Workflow, graph: dict, user_id: str) -> int:
+    """Store graph as the workflow's new current version. An active workflow that no longer validates is paused."""
+    n = (db.scalar(select(func.max(WorkflowVersion.version)).where(WorkflowVersion.workflow_id == wf.id)) or 0) + 1
+    wv = WorkflowVersion(workflow_id=wf.id, version=n, graph=graph, created_by=user_id)
+    db.add(wv)
+    db.flush()
+    wf.current_version_id = wv.id
+    if wf.status == "active":
+        check = validate(db, wf, graph)
+        if not check["valid"] or check["warnings"]:
+            wf.status = "paused"
+    return n
+
+
+def activate(db: Session, wf: Workflow) -> str | None:
+    """Make the workflow live. Returns a new webhook signing secret (shown once) for a webhook trigger, else None."""
+    graph = db.get(WorkflowVersion, wf.current_version_id).graph
+    check = validate(db, wf, graph)
+    if not check["valid"] or check["warnings"]:
+        raise HTTPException(409, "Fix the workflow first: " + "; ".join(e["message"] for e in (check["errors"] + check["warnings"])[:3]))
+    wf.status = "active"
+    return ensure_webhook_secret(db, wf) if graph["trigger"]["type"] == "webhook" else None
 
 
 def tool_catalog(db: Session, actor: runtime.Actor) -> dict[str, dict]:
@@ -88,7 +112,7 @@ def execute(db: Session, wf: Workflow, trigger: str, payload: dict, dry_run: boo
     version = db.get(WorkflowVersion, wf.current_version_id)
     if not version:
         raise HTTPException(409, "Workflow has no version")
-    actor = owner_actor(db, wf)
+    actor = owner_actor(db, wf, automatic=trigger == "automatic")
     graph = version.graph
     check = validate_workflow_graph(graph, tool_catalog(db, actor))
     if not check["valid"]:
@@ -141,6 +165,10 @@ def execute(db: Session, wf: Workflow, trigger: str, payload: dict, dry_run: boo
     run.finished_at = utcnow()
     db.commit()
     audit.record(db, wf.organization_id, actor, "workflow.run", wf.name, run_id=run.id, status=run.status, trigger=trigger, dry_run=dry_run)
+    if run.status == "failed" and not dry_run:
+        automation.emit(db, wf.organization_id, "failure", {
+            "source": "workflow", "tool": "", "integration": "", "error_class": "workflow_failed", "http_status": None, "error": run.error,
+            "workflow": wf.name, "workflow_id": wf.id, "run_id": run.id, "actor_type": actor.kind, "link": f"#/workflows/{wf.id}"})
     from . import healing
     healing.on_workflow_failure(db, wf, run)
     db.commit()

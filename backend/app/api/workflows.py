@@ -4,14 +4,14 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.config import get_settings
 from ..core.db import get_db
 from ..core.security import Principal, current_principal, require_role
 from ..models import Workflow, WorkflowRun, WorkflowStep, WorkflowVersion
-from ..services import agents, audit, workflows
+from ..services import agents, audit, automation, workflows
 from ..services.ai_gateway import Gateway, ProviderError
 from .common import actor_of, iso, username
 
@@ -43,6 +43,7 @@ def view(db: Session, wf: Workflow, full: bool = False) -> dict:
         out["webhook_url"] = f"{get_settings().public_base_url.rstrip('/')}/api/v1/hooks/{wf.id}"
         out["validation"] = workflows.validate(db, wf, v.graph)
         out["tools"] = workflows.tool_catalog(db, workflows.owner_actor(db, wf))
+        out["events"] = {k: {"description": d, "fields": automation.FIELDS[k], "sample": automation.SAMPLES[k]} for k, d in automation.EVENTS.items()}
     return out
 
 
@@ -105,19 +106,11 @@ def add_step(wid: str, body: GraphIn, p: Principal = Depends(require_role("user"
     """Save a new graph version (the editor sends the whole graph: steps, dependencies, conditions)."""
     wf = _wf(db, p, wid)
     _can_edit(p, wf)
-    n = (db.scalar(select(func.max(WorkflowVersion.version)).where(WorkflowVersion.workflow_id == wf.id)) or 0) + 1
-    wv = WorkflowVersion(workflow_id=wf.id, version=n, graph=body.graph, created_by=p.id)
-    db.add(wv)
-    db.flush()
-    wf.current_version_id = wv.id
     if body.name:
         wf.name = body.name
     if body.description is not None:
         wf.description = body.description
-    if wf.status == "active":
-        check = workflows.validate(db, wf, body.graph)
-        if not check["valid"] or check["warnings"]:
-            wf.status = "paused"
+    n = workflows.save_version(db, wf, body.graph, p.id)
     audit.record(db, p.org_id, p, "workflow.update", wf.name, version=n)
     db.commit()
     return view(db, wf, True)
@@ -133,12 +126,7 @@ def validate_graph(wid: str, p: Principal = Depends(current_principal), db: Sess
 def activate(wid: str, p: Principal = Depends(require_role("user")), db: Session = Depends(get_db)):
     wf = _wf(db, p, wid)
     _can_edit(p, wf)
-    graph = db.get(WorkflowVersion, wf.current_version_id).graph
-    check = workflows.validate(db, wf, graph)
-    if not check["valid"] or check["warnings"]:
-        raise HTTPException(409, "Fix the workflow first: " + "; ".join(e["message"] for e in (check["errors"] + check["warnings"])[:3]))
-    wf.status = "active"
-    secret = workflows.ensure_webhook_secret(db, wf) if graph["trigger"]["type"] == "webhook" else None
+    secret = workflows.activate(db, wf)
     audit.record(db, p.org_id, p, "workflow.activate", wf.name)
     db.commit()
     return {**view(db, wf, True), "webhook_secret": secret}

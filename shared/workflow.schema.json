@@ -11,11 +11,29 @@
       "required": ["type"],
       "additionalProperties": false,
       "properties": {
-        "type": { "enum": ["manual", "webhook", "schedule"] },
+        "type": { "enum": ["manual", "webhook", "schedule", "automatic"] },
         "interval_minutes": { "type": "integer", "minimum": 1, "maximum": 10080 },
+        "event": { "enum": ["failure", "alert", "record"], "description": "automatic: the H.E.D.E.S event that starts the workflow" },
+        "conditions": {
+          "description": "automatic: start only when all of these hold for the event (fields as ${trigger.<field>})",
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "required": ["left", "op"],
+            "additionalProperties": false,
+            "properties": {
+              "left": { "type": "string" },
+              "op": { "enum": ["eq", "neq", "contains", "not_contains", "exists", "not_exists", "gt", "lt", "in"] },
+              "right": {}
+            }
+          }
+        },
         "description": { "type": "string" },
         "sample": { "type": "object" }
-      }
+      },
+      "if": { "properties": { "type": { "const": "automatic" } } },
+      "then": { "required": ["event"] }
     },
     "nodes": {
       "type": "array",

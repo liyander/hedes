@@ -557,6 +557,11 @@ Problems appear in a banner above the graph.
   - `X-Integra-Delivery` (optional): a unique id. A repeated id is rejected as a replay.
   - Bodies are limited to 256 KB. The run starts in the background (HTTP 202).
 - **Schedule** triggers are checked every 30 seconds and run when their interval has elapsed.
+- **Automatic** triggers start the workflow when a H.E.D.E.S event happens and every trigger condition holds:
+  - *failure* - a tool call, data-source run or workflow run fails (`${trigger.tool}`, `${trigger.integration}`, `${trigger.error_class}`, `${trigger.http_status}`, `${trigger.error}`, `${trigger.workflow}`, `${trigger.link}`);
+  - *alert* - H.E.D.E.S raises an alert (`${trigger.kind}`, `${trigger.severity}`, `${trigger.message}`, `${trigger.link}`);
+  - *record* - a data source stores a new event (`${trigger.source}`, `${trigger.title}`, `${trigger.severity}`, `${trigger.category}`, ...).
+  Example: post every authentication failure to Slack with the condition `${trigger.error_class} eq auth_invalid`. A failure caused by an automatic run never starts another automatic run, and the same event starts a workflow at most once every 5 minutes.
 
 ---
 

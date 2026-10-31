@@ -22,3 +22,5 @@ def alert(db: Session, org_id: str, kind: str, message: str, severity: str = "me
     # Delivered to Slack / email / WhatsApp only after the surrounding transaction commits (see services/notify.py).
     db.info.setdefault("outbound_alerts", []).append({"id": alert_id, "org_id": org_id, "kind": kind, "severity": severity, "message": message,
                                                       "link": link, "integration_id": integration_id})
+    from . import automation
+    automation.emit(db, org_id, "alert", {"kind": kind, "severity": severity, "message": message, "link": link, "integration_id": integration_id})

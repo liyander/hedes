@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from ..core.db import session_scope, utcnow
 from ..models import (Connection, DeadLetter, Execution, IngestRun, IngestSource, Integration, IntegrationVersion,
                       NormalizedDevice, NormalizedEvent, NormalizedUser)
-from . import audit, cron, engine, jsonpath, monitoring, vault
+from . import audit, automation, cron, engine, jsonpath, monitoring, vault
 from .integrations import org_policy
 from .validation import resolve_event_aliases
 
@@ -329,6 +329,8 @@ def _store(db: Session, src: IngestSource, integ: Integration, entity: str, reco
                                        raw=_bounded(item), **rec)
             db.add(existing[rec[key]])
             run.stored += 1
+            if entity == "event":
+                automation.emit(db, src.organization_id, "record", {**rec, "source": integ.slug, "source_id": src.id})
         elif entity == "event":
             run.duplicates += 1
         else:

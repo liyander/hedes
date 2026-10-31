@@ -60,6 +60,7 @@ async function renderEditor({ el, params }) {
   let sel = graph.nodes[0]?.id || '__trigger';
   let lastRun = null;
   const tools = wf.tools;
+  const events = wf.events || {};
 
   const stepStatus = () => Object.fromEntries((lastRun?.steps || []).map((s) => [s.node_id, s.status]));
 
@@ -71,7 +72,7 @@ async function renderEditor({ el, params }) {
     const edge = (a, b) => `<path d="M${a.x + 220} ${a.y + 34} C ${a.x + 245} ${a.y + 34}, ${b.x - 25} ${b.y + 34}, ${b.x} ${b.y + 34}"/>`;
     const edges = graph.nodes.flatMap((n) => ((n.depends_on || []).length ? n.depends_on.filter((x) => pos[x]).map((x) => edge(pos[x], pos[n.id])) : [edge(pos.__trigger, pos[n.id])])).join('');
     return `<div class="wf-canvas" style="height:${Math.max(340, h + 20)}px"><svg class="edges" width="${w}" height="${h}">${edges}</svg>
-      <div class="wf-node trigger ${sel === '__trigger' ? 'sel' : ''}" data-node="__trigger" style="left:${pos.__trigger.x}px;top:${pos.__trigger.y}px"><b>${icon('play', 13)} Trigger</b><div class="t">${esc(graph.trigger.type)}${graph.trigger.type === 'schedule' ? ` · every ${graph.trigger.interval_minutes || 60} min` : ''}</div></div>
+      <div class="wf-node trigger ${sel === '__trigger' ? 'sel' : ''}" data-node="__trigger" style="left:${pos.__trigger.x}px;top:${pos.__trigger.y}px"><b>${icon('play', 13)} Trigger</b><div class="t">${esc(graph.trigger.type)}${graph.trigger.type === 'schedule' ? ` · every ${graph.trigger.interval_minutes || 60} min` : ''}${graph.trigger.type === 'automatic' ? ` · on ${esc(graph.trigger.event || '?')}${(graph.trigger.conditions || []).length ? ` · ${graph.trigger.conditions.length} condition(s)` : ''}` : ''}</div></div>
       ${graph.nodes.map((n) => `<div class="wf-node ${sel === n.id ? 'sel' : ''} ${st[n.id] ? `st-${st[n.id]}` : ''}" data-node="${esc(n.id)}" style="left:${pos[n.id].x}px;top:${pos[n.id].y}px">
         <b>${esc(n.label || n.id)}</b><div class="t">${esc(n.tool)}</div>${(n.when || []).length ? `<div class="cond">if ${n.when.map((c) => `${esc(c.left)} ${esc(c.op)} ${esc(c.right ?? '')}`).join(' and ')}</div>` : ''}${st[n.id] ? `<div style="margin-top:4px">${badge(st[n.id])}</div>` : ''}</div>`).join('')}
     </div>`;
@@ -80,9 +81,14 @@ async function renderEditor({ el, params }) {
   function inspector() {
     if (sel === '__trigger') {
       const t = graph.trigger;
+      const ev = events[t.event];
       return `<div class="card-body"><h3 style="font-size:15px;margin-bottom:10px">Trigger</h3>
-        <div class="field"><label>Type</label><select id="tt">${['manual', 'webhook', 'schedule'].map((x) => `<option ${x === t.type ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+        <div class="field"><label>Type</label><select id="tt">${['manual', 'webhook', 'schedule', 'automatic'].map((x) => `<option ${x === t.type ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
         ${t.type === 'schedule' ? `<div class="field"><label>Every N minutes</label><input type="number" id="ti" min="1" value="${t.interval_minutes || 60}"></div>` : ''}
+        ${t.type === 'automatic' ? `<div class="field"><label>Start when</label><select id="tev">${Object.entries(events).map(([k, e]) => `<option value="${esc(k)}" ${k === t.event ? 'selected' : ''}>${esc(e.description)}</option>`).join('')}</select>
+          ${ev ? `<div class="hint">Event fields: ${ev.fields.map((f) => `<code>\${trigger.${esc(f)}}</code>`).join(' ')}</div>` : ''}</div>
+          <div class="field"><label>Only if (all must hold)</label><div id="tconds">${(t.conditions || []).map((c, i) => condRow(c, i)).join('')}</div><button class="btn sm" id="add-tcond">${icon('plus', 13)} Condition</button>
+          <div class="hint">Runs once the workflow is active. A failure caused by an automatic run never starts another one, and the same event starts this workflow at most once every 5 minutes.</div></div>` : ''}
         ${t.type === 'webhook' ? `<div class="field"><label>Webhook URL</label><pre style="white-space:pre-wrap;word-break:break-all">${esc(wf.webhook_url)}</pre>
           <div class="hint">POST JSON with headers <code>X-Integra-Timestamp</code> (unix seconds), <code>X-Integra-Signature: sha256=HMAC(secret, "&lt;timestamp&gt;.&lt;body&gt;")</code> and an optional <code>X-Integra-Delivery</code> id. Requests older than 5 minutes or replayed ids are rejected. The secret is shown once on first activation.</div></div>` : ''}
         <div class="field"><label>Sample payload (used for manual runs and dry runs)</label><textarea class="code" id="ts" style="min-height:160px">${esc(JSON.stringify(t.sample || {}, null, 2))}</textarea>
@@ -109,6 +115,10 @@ async function renderEditor({ el, params }) {
     <select data-c="op" style="flex:1">${OPS.map((o) => `<option ${o === c.op ? 'selected' : ''}>${o}</option>`).join('')}</select>
     <input type="text" data-c="right" value="${esc(c.right ?? '')}" style="flex:1.4" placeholder="value"><button class="btn sm ghost" data-rmcond="${i}">${icon('x', 13)}</button></div>`;
 
+  const condsIn = (box) => [...(box?.querySelectorAll('[data-cond]') || [])]
+    .map((r) => ({ left: r.querySelector('[data-c=left]').value, op: r.querySelector('[data-c=op]').value, right: r.querySelector('[data-c=right]').value }))
+    .filter((c) => c.left).map((c) => (['exists', 'not_exists'].includes(c.op) ? { left: c.left, op: c.op } : c));
+
   function collect() {
     const root = $('#insp', el);
     if (!root) return;
@@ -116,6 +126,17 @@ async function renderEditor({ el, params }) {
       graph.trigger.type = $('#tt', root).value;
       if ($('#ti', root)) graph.trigger.interval_minutes = Number($('#ti', root).value) || 60;
       if (graph.trigger.type !== 'schedule') delete graph.trigger.interval_minutes;
+      if (graph.trigger.type === 'automatic') {
+        const event = $('#tev', root)?.value || graph.trigger.event || Object.keys(events)[0];
+        // switching event: start from that event's sample so dry runs show realistic fields
+        if (event !== graph.trigger.event) $('#ts', root).value = JSON.stringify(events[event]?.sample || {}, null, 2);
+        graph.trigger.event = event;
+        graph.trigger.conditions = condsIn($('#tconds', root));
+        if (!graph.trigger.conditions.length) delete graph.trigger.conditions;
+      } else {
+        delete graph.trigger.event;
+        delete graph.trigger.conditions;
+      }
       try { graph.trigger.sample = JSON.parse($('#ts', root).value || '{}'); } catch (e) { throw new Error('Sample payload must be valid JSON'); }
       return;
     }
@@ -131,8 +152,7 @@ async function renderEditor({ el, params }) {
     });
     n.depends_on = [...root.querySelectorAll('[data-dep]:checked')].map((x) => x.dataset.dep);
     if (!n.depends_on.length) delete n.depends_on;
-    n.when = [...root.querySelectorAll('[data-cond]')].map((r) => ({ left: r.querySelector('[data-c=left]').value, op: r.querySelector('[data-c=op]').value, right: r.querySelector('[data-c=right]').value }))
-      .filter((c) => c.left).map((c) => (['exists', 'not_exists'].includes(c.op) ? { left: c.left, op: c.op } : c));
+    n.when = condsIn($('#conds', root));
     if (!n.when.length) delete n.when;
     n.on_failure = $('#nf', root).value;
     if (!n.label) delete n.label;
@@ -174,7 +194,7 @@ async function renderEditor({ el, params }) {
   }
 
   el.addEventListener('click', async (e) => {
-    const t = e.target.closest('[data-node], #save, #dry, #run, #activate, #pause, #archive, #add-node, #del-node, #add-cond, [data-rmcond]');
+    const t = e.target.closest('[data-node], #save, #dry, #run, #activate, #pause, #archive, #add-node, #del-node, #add-cond, #add-tcond, [data-rmcond]');
     if (!t) return;
     try {
       if (t.dataset.node) { collect(); sel = t.dataset.node; return paint(); }
@@ -193,7 +213,8 @@ async function renderEditor({ el, params }) {
         return paint();
       }
       if (t.id === 'add-cond') { collect(); const n = graph.nodes.find((x) => x.id === sel); n.when = [...(n.when || []), { left: '${trigger.}', op: 'eq', right: '' }]; return paint(); }
-      if (t.dataset.rmcond !== undefined) { collect(); const n = graph.nodes.find((x) => x.id === sel); n.when.splice(+t.dataset.rmcond, 1); return paint(); }
+      if (t.id === 'add-tcond') { collect(); graph.trigger.conditions = [...(graph.trigger.conditions || []), { left: '${trigger.}', op: 'eq', right: '' }]; return paint(); }
+      if (t.dataset.rmcond !== undefined) { collect(); (sel === '__trigger' ? graph.trigger.conditions : graph.nodes.find((x) => x.id === sel).when).splice(+t.dataset.rmcond, 1); return paint(); }
       t.disabled = true;
       if (t.id === 'save') { await save(); toast('Saved', 'ok'); return paint(); }
       if (t.id === 'dry' || t.id === 'run') {
@@ -222,7 +243,7 @@ async function renderEditor({ el, params }) {
       if (/workflow/i.test(err.message)) { wf = await api(`/workflows/${wf.id}`); $('#val', el).innerHTML = valBox(wf.validation); }
     }
   });
-  el.addEventListener('change', (e) => { if (e.target.id === 'tt' || e.target.id === 'nt') { collect(); paint(); } });
+  el.addEventListener('change', (e) => { if (['tt', 'tev', 'nt'].includes(e.target.id)) { collect(); paint(); } });
   paint();
 }
 

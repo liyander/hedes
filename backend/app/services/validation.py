@@ -219,6 +219,14 @@ def validate_workflow_graph(graph: dict, known_tools: dict[str, dict]) -> dict:
     if len(ids) != len(set(ids)):
         errors.append({"path": "nodes", "message": "Node ids must be unique"})
     node_ids = set(ids)
+    try:
+        trigger_refs = templates.references([c.get("left", "") for c in graph["trigger"].get("conditions") or []])
+    except templates.TemplateError as e:
+        trigger_refs = []
+        errors.append({"path": "trigger/conditions", "message": str(e)})
+    for ref in trigger_refs:
+        if templates.split_ref(ref)[0] != "trigger":
+            errors.append({"path": "trigger/conditions", "message": f"${{{ref}}}: trigger conditions can only use the event's fields (${{trigger.<field>}})"})
     for n in graph["nodes"]:
         where = f"nodes/{n['id']}"
         for d in n.get("depends_on") or []:

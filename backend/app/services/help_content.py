@@ -43,7 +43,7 @@ PAGES = {
     "workflows": {
         "title": "Workflows",
         "summary": "Chain published tools into automations with conditions, parallel steps and references to earlier outputs.",
-        "steps": ["Create a workflow and add steps that call tools.", "Use ${trigger.x} and ${steps.id.output.x} to pass data.", "Dry-run to see every request without sending it, then activate.", "Trigger manually, by signed webhook, or on a schedule."],
+        "steps": ["Create a workflow and add steps that call tools.", "Use ${trigger.x} and ${steps.id.output.x} to pass data.", "Dry-run to see every request without sending it, then activate.", "Trigger manually, by signed webhook, on a schedule, or automatically when a failure, alert or new data-source record matches your conditions."],
         "options": [{"name": "Conditions", "text": "A step runs only when its conditions are true."}, {"name": "On failure", "text": "Stop the run or continue."}, {"name": "Webhook", "text": "Signed with HMAC and protected against replay."}],
         "tips": [],
     },

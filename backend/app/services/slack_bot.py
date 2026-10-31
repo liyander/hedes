@@ -43,13 +43,18 @@ MANIFEST = {
     "features": {"bot_user": {"display_name": "H.E.D.E.S", "always_online": True},
                  "app_home": {"messages_tab_enabled": True, "messages_tab_read_only_enabled": False}},
     # users:read lets bots.info confirm the bot token and the app-level token come from the same app
-    "oauth_config": {"scopes": {"bot": ["app_mentions:read", "chat:write", "im:history", "im:read", "im:write", "users:read"]}},
-    "settings": {"event_subscriptions": {"bot_events": ["app_mention", "message.im"]}, "interactivity": {"is_enabled": True},
+    # channels:read names a #channel mention that Slack sends as a bare ID
+    "oauth_config": {"scopes": {"bot": ["app_mentions:read", "channels:history", "channels:read", "chat:write", "chat:write.public",
+                                        "groups:history", "im:history", "im:read", "im:write", "users:read"]}},
+    "settings": {"event_subscriptions": {"bot_events": ["app_mention", "message.channels", "message.groups", "message.im"]}, "interactivity": {"is_enabled": True},
                  "socket_mode_enabled": True, "org_deploy_enabled": False, "token_rotation_enabled": False},
 }
-ACTION_LABELS = {"create_workflow": "Create a workflow", "run_workflow": "Run a workflow", "investigate_failure": "Investigate a failure"}
+ACTION_LABELS = {"create_workflow": "Create a workflow", "run_workflow": "Run a workflow", "investigate_failure": "Investigate a failure",
+                 "set_alert_channel": "Send alerts to a Slack channel", "update_workflow": "Change a workflow",
+                 "set_workflow_status": "Activate or pause a workflow"}
 NEEDED_SCOPES = {"chat:write": "posting replies", "im:history": "receiving direct messages", "im:read": "reading direct messages",
-                 "im:write": "replying in direct messages", "app_mentions:read": "@mentions in channels"}
+                 "im:write": "replying in direct messages", "app_mentions:read": "@mentions in channels",
+                 "channels:history": "replies in channel threads, such as under alerts"}
 
 
 def missing_scopes(bot_token: str) -> dict[str, str]:
@@ -60,6 +65,14 @@ def missing_scopes(bot_token: str) -> dict[str, str]:
         return {}
     granted = {s.strip() for s in (r.headers.get("x-oauth-scopes") or "").split(",") if s.strip()}
     return {s: why for s, why in NEEDED_SCOPES.items() if s not in granted} if granted else {}
+
+
+def channel_name(bot_token: str, channel_id: str) -> str:
+    """A channel's name, or "" when Slack won't say (conversations.info needs channels:read)."""
+    try:
+        return (call(bot_token, "conversations.info", channel=channel_id).get("channel") or {}).get("name", "")
+    except Exception:
+        return ""
 
 
 def bot_app_id(bot_token: str) -> str:
@@ -88,6 +101,23 @@ def tokens(db: Session, org: Organization) -> tuple[str, str]:
     return bot, app
 
 
+def post_alert(db: Session, org: Organization, alert: dict) -> str | None:
+    """Post an alert to the organisation's Slack alert channel. None when no channel is set; else 'sent' or the error."""
+    cfg = config_of(org)
+    if not (cfg.get("enabled") and cfg.get("alert_channel") and cfg.get("bot_ref")):
+        return None
+    base = get_settings().public_base_url.rstrip("/")
+    link = f"{base}/{alert['link']}" if alert.get("link") else base
+    icon = {"critical": ":rotating_light:", "high": ":red_circle:", "medium": ":large_orange_circle:"}.get(alert.get("severity"), ":information_source:")
+    try:
+        call(tokens(db, org)[0], "chat.postMessage", channel=cfg["alert_channel"],
+             text=f"{icon} *{alert.get('kind', 'alert').replace('_', ' ')}* ({alert.get('severity', 'info')})\n{alert['message']}\n<{link}|Open in H.E.D.E.S>")
+        return "sent"
+    except Exception as e:  # noqa: BLE001 - reported like every other delivery channel
+        hint = " - invite the app to the channel with /invite" if "not_in_channel" in str(e) else ""
+        return f"{type(e).__name__}: {e}{hint}"
+
+
 class SlackError(Exception):
     pass
 
@@ -95,7 +125,10 @@ class SlackError(Exception):
 def call(token: str, method: str, **body) -> dict:
     """One Slack Web API call. Raises SlackError with Slack's error code (Slack answers HTTP 200 for failures)."""
     try:
-        r = httpx.post(API + method, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=20)
+        # read methods (conversations.info, conversations.replies) only take form fields; blocks need JSON
+        nested = any(isinstance(v, (dict, list)) for v in body.values())
+        r = httpx.post(API + method, headers={"Authorization": f"Bearer {token}"}, timeout=20,
+                       **({"json": body} if nested else {"data": {k: v if isinstance(v, str) else json.dumps(v) for k, v in body.items()}}))
     except httpx.HTTPError as e:
         raise SlackError(f"cannot reach Slack: {type(e).__name__}")
     try:
@@ -148,14 +181,24 @@ def principal_for(db: Session, org: Organization, slack_user: str) -> Principal 
 def mrkdwn(text: str) -> str:
     """The assistant writes Markdown; Slack uses mrkdwn (*bold*, <url|text>)."""
     text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
-    text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"<\2|\1>", text)
     base = get_settings().public_base_url.rstrip("/")
-    return re.sub(r"(?<![\w/])#/([\w/-]+)", lambda m: f"<{base}/#/{m.group(1)}|open in H.E.D.E.S>", text)
+    text = re.sub(r"\[([^\]]+)\]\(/?(#/[^)\s]*)\)", lambda m: f"<{base}/{m.group(2)}|{m.group(1)}>", text)  # [Workflows](/#/workflows)
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"<\2|\1>", text)
+    text = re.sub(r"(?<![\w/])#/([\w/-]+)", lambda m: f"<{base}/#/{m.group(1)}|open in H.E.D.E.S>", text)
+    # a channel ID becomes a channel link, which Slack shows as the channel's real name (#failures)
+    return re.sub(r"`?(?<![\w<|])#?([CG](?=[A-Z]*\d)[A-Z0-9]{8,})\b`?", r"<#\1>", text)
 
 
 def _args_text(args: dict) -> str:
-    parts = [f"{k}: {json.dumps(v) if not isinstance(v, str) else v}" for k, v in (args or {}).items()]
-    return "; ".join(parts)[:600]
+    from .assistant import SLACK_CHANNEL_ID
+    lines = []
+    for k, v in (args or {}).items():
+        if isinstance(v, str) and k == "channel" and SLACK_CHANNEL_ID.fullmatch(v):
+            v = f"<#{v}> (existing channel)"
+        elif not isinstance(v, str):
+            v = f"`{json.dumps(v)[:400]}`"
+        lines.append(f"• *{k}*: {v or '(none)'}")
+    return "\n".join(lines)[:1500]
 
 
 def action_blocks(act: AssistantAction) -> list[dict]:
@@ -163,7 +206,7 @@ def action_blocks(act: AssistantAction) -> list[dict]:
     label = ACTION_LABELS.get(act.tool, act.tool.replace("_", " ").capitalize())
     desc = TOOLS.get(act.tool, (False, "user", (), ""))[3]
     return [
-        {"type": "section", "text": {"type": "mrkdwn", "text": f":hand: *Approval needed - {label}*\n{act.why or desc}\n`{_args_text(act.args)}`"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f":hand: *Approval needed - {label}*\n{act.why or desc}\n{_args_text(act.args)}"}},
         {"type": "actions", "block_id": f"hedes_{act.id}", "elements": [
             {"type": "button", "action_id": "hedes_approve", "value": act.id, "style": "primary", "text": {"type": "plain_text", "text": "Approve"}},
             {"type": "button", "action_id": "hedes_reject", "value": act.id, "style": "danger", "text": {"type": "plain_text", "text": "Reject"}}]},
@@ -200,6 +243,9 @@ def handle_message(db: Session, org: Organization, token: str, event: dict) -> N
     channel, user = event.get("channel", ""), event.get("user", "")
     thread_ts = event.get("thread_ts") or event.get("ts")
     text = re.sub(r"<@[A-Z0-9]+>", "", event.get("text") or "").strip()
+    # a channel mention arrives as <#C0123ABCD|name>: keep the ID, which is what Slack tools need
+    text = re.sub(r"<#([A-Z0-9]+)(?:\|([^>]*))?>",
+                  lambda m: f"#{m.group(2) or channel_name(token, m.group(1)) or m.group(1)} (existing Slack channel, ID {m.group(1)})", text)
     command = text.strip("`*_~ ").strip()  # "link 123456" may arrive formatted as code (`link 123456`)
     if not text:
         return
@@ -220,6 +266,12 @@ def handle_message(db: Session, org: Organization, token: str, event: dict) -> N
     if thread is None:
         call(token, "chat.postMessage", channel=channel, thread_ts=thread_ts, text="This thread belongs to someone else's conversation - mention me in a new message.")
         return
+    if thread_ts != event.get("ts") and not db.scalars(select(AssistantMessage.id).where(AssistantMessage.thread_id == thread.id)).first():
+        # the first reply in a thread under another message (an alert, say): that message is what we are discussing
+        parent = thread_parent(token, channel, thread_ts)
+        if parent:
+            from .ai_gateway import wrap_document
+            text = f"(This Slack thread is about the message below.)\n{wrap_document('slack thread', parent, 3000)}\n\n{text}"
     try:
         msg = assistant.chat(db, p, thread, text, [], None)
     except HTTPException as e:
@@ -246,11 +298,34 @@ def handle_action(db: Session, org: Organization, token: str, payload: dict) -> 
     act = assistant.decide(db, p, act, approve)
     outcome = {"executed": ":white_check_mark: Done", "failed": f":x: Failed: {act.error}", "rejected": ":no_entry_sign: Rejected"}.get(act.status, act.status)
     call(token, "chat.update", channel=channel, ts=message_ts, text=f"{act.tool}: {act.status}",
-         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"*{ACTION_LABELS.get(act.tool, act.tool)}* - {outcome}\n`{_args_text(act.args)}`"}}])
+         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"*{ACTION_LABELS.get(act.tool, act.tool)}* - {outcome}\n{_args_text(act.args)}"}}])
     thread = db.get(AssistantThread, act.thread_id)
     msg = assistant.follow_up(db, p, thread, act, None)
     if msg:
         _post_reply(token, db, msg, channel, thread_ts)
+
+
+def _talking_to_us(db: Session, org: Organization, cfg: dict, ev: dict) -> bool:
+    """A channel message without an @mention is for us when it replies in a thread under one of our messages (an alert)
+    or in a thread where a conversation with us is already going. Other channel chatter is ignored."""
+    thread_ts, bot = ev.get("thread_ts"), cfg.get("bot_user_id", "")
+    if not thread_ts or thread_ts == ev.get("ts") or (bot and f"<@{bot}>" in (ev.get("text") or "")):
+        return False  # not a thread reply, or an @mention (that arrives as app_mention too)
+    if bot and ev.get("parent_user_id") == bot:
+        return True
+    ref = f"slack:{ev.get('channel', '')}:{thread_ts}"
+    return db.scalars(select(AssistantThread.id).where(AssistantThread.organization_id == org.id, AssistantThread.external_ref == ref)).first() is not None
+
+
+def thread_parent(bot_token: str, channel: str, thread_ts: str) -> str:
+    """The text of the message a thread hangs under, or "" (conversations.replies needs channels:history)."""
+    try:
+        msgs = call(bot_token, "conversations.replies", channel=channel, ts=thread_ts, limit=1).get("messages") or []
+    except Exception:
+        return ""
+    m = msgs[0] if msgs else {}
+    blocks = " ".join(b.get("text", {}).get("text", "") for b in m.get("blocks") or [] if isinstance(b.get("text"), dict))
+    return m.get("text") or blocks
 
 
 def handle_envelope(org_id: str, envelope: dict) -> None:
@@ -266,6 +341,8 @@ def handle_envelope(org_id: str, envelope: dict) -> None:
                 if ev.get("bot_id") or ev.get("subtype") or ev.get("user") == cfg.get("bot_user_id"):
                     return
                 if ev.get("type") == "app_mention" or (ev.get("type") == "message" and ev.get("channel_type") == "im"):
+                    handle_message(db, org, token, ev)
+                elif ev.get("type") == "message" and _talking_to_us(db, org, cfg, ev):
                     handle_message(db, org, token, ev)
             elif envelope.get("type") == "interactive" and payload.get("type") == "block_actions":
                 handle_action(db, org, token, payload)
@@ -301,7 +378,7 @@ class Bridge(threading.Thread):
                 url = call(app_token, "apps.connections.open")["url"]
                 with connect(url, open_timeout=15, close_timeout=2) as ws:
                     missing = missing_scopes(bot_token)
-                    self._status("connected", ("Connected, but the bot token is missing scopes, so Slack will not deliver messages: "
+                    self._status("connected", ("Connected, but the bot token is missing scopes, so Slack will not deliver some messages: "
                                                + ", ".join(f"{s} ({why})" for s, why in missing.items())
                                                + ". Add them under OAuth & Permissions > Bot Token Scopes, reinstall the app, then press Save here.")
                                  if missing else "")

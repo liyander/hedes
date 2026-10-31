@@ -9,6 +9,7 @@ from ..core.db import get_db
 from ..core.security import Principal, current_principal, require_human
 from ..models import Organization, User
 from ..services import audit, slack_bot, vault
+from ..services.assistant import SLACK_CHANNEL_ID
 
 router = APIRouter(prefix="/api/v1/settings/slack", tags=["slack"])
 
@@ -19,7 +20,8 @@ def _view(db: Session, org: Organization, p: Principal) -> dict:
     out = {"enabled": bool(cfg.get("enabled")), "configured": bool(cfg.get("bot_ref") and cfg.get("app_ref")),
            "team": cfg.get("team", ""), "bot_name": cfg.get("bot_name", ""), "status": slack_bot.STATUS.get(org.id, {"state": "stopped"}),
            "my_links": [s for s, u in links.items() if u == p.id], "manifest": slack_bot.MANIFEST,
-           "missing_scopes": cfg.get("missing_scopes") or {}, "last_event": slack_bot.LAST_EVENT.get(org.id)}
+           "missing_scopes": cfg.get("missing_scopes") or {}, "last_event": slack_bot.LAST_EVENT.get(org.id),
+           "alert_channel": cfg.get("alert_channel", "")}
     if p.at_least("admin"):
         out["links"] = [{"slack_user": s, "user_id": u, "username": (db.get(User, u).username if db.get(User, u) else "?")} for s, u in links.items()]
     return out
@@ -34,6 +36,7 @@ class SlackIn(BaseModel):
     enabled: bool = False
     bot_token: str | None = Field(default=None, max_length=300)  # xoxb-…, omitted = keep
     app_token: str | None = Field(default=None, max_length=300)  # xapp-… with connections:write, omitted = keep
+    alert_channel: str | None = Field(default=None, max_length=40)  # channel ID that receives every alert, '' = off, omitted = keep
 
 
 @router.put("")
@@ -57,6 +60,11 @@ def save_slack(body: SlackIn, p: Principal = Depends(require_human("admin")), db
             raise HTTPException(422, "The app-level token must start with xapp- (Basic Information > App-Level Tokens, scope connections:write).")
         vault.delete_secret(db, cfg.get("app_ref"))
         cfg["app_ref"] = vault.store_secret(db, p.org_id, {"token": tok})
+    if body.alert_channel is not None:
+        ch = body.alert_channel.strip()
+        if ch and not SLACK_CHANNEL_ID.fullmatch(ch):
+            raise HTTPException(422, "The alert channel must be a Slack channel ID such as C0123ABCD (open the channel > channel name > About).")
+        cfg["alert_channel"] = ch
     if body.enabled and not (cfg.get("bot_ref") and cfg.get("app_ref")):
         raise HTTPException(422, "Add both the bot token and the app-level token before turning Slack on.")
     cfg["enabled"] = body.enabled
@@ -64,7 +72,7 @@ def save_slack(body: SlackIn, p: Principal = Depends(require_human("admin")), db
         bot, _ = slack_bot.tokens(db, org) if not body.bot_token else (body.bot_token.strip(), None)
         cfg["missing_scopes"] = slack_bot.missing_scopes(bot)
     slack_bot.save_config(db, org, cfg)
-    audit.record(db, p.org_id, p, "settings.slack", org.name, enabled=body.enabled, bot_rotated=bool(body.bot_token), app_rotated=bool(body.app_token))
+    audit.record(db, p.org_id, p, "settings.slack", org.name, enabled=body.enabled, alert_channel=cfg.get("alert_channel", ""), bot_rotated=bool(body.bot_token), app_rotated=bool(body.app_token))
     db.commit()
     slack_bot.sync_bridges()
     return _view(db, org, p)
