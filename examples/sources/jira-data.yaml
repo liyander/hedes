@@ -1,0 +1,82 @@
+template:
+  id: jira-data
+  title: Jira Cloud
+  category: Ticketing
+  summary: Recently updated Jira issues (as events) and Jira users (as users). Read-only.
+  free_tier: Jira Cloud Free plan.
+  docs: https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/
+  credential:
+    type: basic
+    name: jira-data
+    how: 'Create an API token at id.atlassian.com → Security → API tokens. In Credentials choose "Username + password": the username is your Atlassian email, the password is the API token.'
+  variables:
+    - {name: jira_site, label: Jira site name, placeholder: my-company, pattern: "^[a-z0-9-]{1,63}$", help: The part before .atlassian.net}
+  setup:
+    - Create an Atlassian API token.
+    - Connect it in Credentials (Username + password) with the name jira-data.
+    - Issues use cursor paging (nextPageToken); users use startAt/maxResults offset paging.
+schema_version: "1.0"
+integration:
+  id: jira-data
+  name: Jira Cloud
+  version: "1.0.0"
+  transport: http
+  description: Jira issues and users in the common event and user formats (read-only).
+  base_url: "https://{{jira_site}}.atlassian.net"
+  authentication:
+    type: basic
+    credential_ref: jira-data
+  rate_limit: {requests_per_minute: 60}
+  operations:
+    - id: search_issues
+      description: Issues updated in the last 30 days
+      method: GET
+      path: /rest/api/3/search/jql
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query:
+          jql: "updated >= -30d ORDER BY updated DESC"
+          maxResults: "100"
+          fields: "summary,status,priority,assignee,reporter,updated,created"
+      pagination: {type: cursor, cursor_param: nextPageToken, next_cursor_path: "$.nextPageToken", max_pages: 30}
+      retry: {max_attempts: 3, backoff_seconds: 2, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$.issues"
+      ingest:
+        entity: event
+        category: ticket
+        fields:
+          event_id: "$.key"
+          timestamp: "$.fields.updated"
+          actor: "$.fields.reporter.displayName"
+          action: "$.fields.summary"
+          target: "$.fields.assignee.displayName"
+          severity: "$.fields.priority.name"
+          message: "$.fields.status.name"
+        defaults: {outcome: unknown}
+        value_maps: {severity: {Highest: critical, High: high, Medium: medium, Low: low, Lowest: low}}
+        schedule: {interval_minutes: 15}
+    - id: list_users
+      description: Jira users
+      method: GET
+      path: /rest/api/3/users/search
+      input_schema:
+        type: object
+        properties: {}
+      pagination: {type: offset, offset_param: startAt, size_param: maxResults, size: 100, max_pages: 50}
+      retry: {max_attempts: 3, backoff_seconds: 2, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$"
+      ingest:
+        entity: user
+        fields:
+          id: "$.accountId"
+          name: "$.displayName"
+          email: "$.emailAddress"
+          status: "$.active"
+        value_maps: {status: {"True": active, "False": inactive, "true": active, "false": inactive}}
+        schedule: {interval_minutes: 360}

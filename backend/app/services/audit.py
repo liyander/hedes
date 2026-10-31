@@ -17,3 +17,5 @@ def alert(db: Session, org_id: str, kind: str, message: str, severity: str = "me
           integration_id: str | None = None, link: str = "") -> None:
     db.add(Alert(organization_id=org_id, kind=kind, message=message, severity=severity,
                  integration_id=integration_id, link=link))
+    # Delivered to Slack / email only after the surrounding transaction commits (see services/notify.py).
+    db.info.setdefault("outbound_alerts", []).append({"org_id": org_id, "kind": kind, "severity": severity, "message": message, "link": link})

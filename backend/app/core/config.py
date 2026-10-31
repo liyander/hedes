@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     ai_timeout_seconds: int = 60
     run_scheduler: bool = True
 
+    # Off by default: the product runs against real services only. DEMO_MODE=true additionally mounts the bundled mock
+    # APIs (/mock/*), seeds sample integrations against them and enables the demo controls. Used by the test suite.
+    demo_mode: bool = False
+
     @property
     def egress_allowlist(self) -> list[str]:
         raw = self.private_egress_allowlist or f"{self.public_base_url.rstrip('/')}/mock/"

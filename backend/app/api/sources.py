@@ -11,8 +11,9 @@ from starlette.concurrency import run_in_threadpool
 
 from ..core.db import get_db, utcnow
 from ..core.security import Principal, current_principal, require_human, require_role
-from ..models import Connection, DeadLetter, IngestRun, IngestSource, Integration, IntegrationVersion, NormalizedEvent
-from ..services import audit, ingest
+from ..models import (Connection, DeadLetter, IngestRun, IngestSource, Integration, IntegrationVersion, NormalizedDevice, NormalizedEvent,
+                      NormalizedUser)
+from ..services import audit, cron, ingest
 from ..services.engine import ERROR_GUIDE
 from .common import iso
 
@@ -45,13 +46,14 @@ def source_view(db: Session, src: IngestSource, detail: bool = False) -> dict:
         "id": src.id, "integration_id": src.integration_id, "integration": integ.name if integ else "?", "slug": integ.slug if integ else "",
         "operation_id": src.operation_id, "description": op.get("description", ""), "category": (op.get("ingest") or {}).get("category", ""),
         "pagination": (op.get("pagination") or {}).get("type", "none"), "auth_type": ((version.config["integration"].get("authentication") or {}).get("type") if version else None),
+        "entity": (op.get("ingest") or {}).get("entity", "event"), "cron": src.cron or "",
         "enabled": src.enabled, "interval_minutes": src.interval_minutes, "running": ingest.is_running(src.id),
         "health": h["status"], "health_reason": h["reason"], "state": src.state,
         "last_run_at": iso(src.last_run_at), "last_success_at": iso(src.last_success_at), "next_run_at": iso(src.next_run_at) if src.enabled else None,
         "watermark": src.watermark, "consecutive_failures": src.consecutive_failures,
         "last_error_class": src.last_error_class, "last_error": src.last_error,
         "error_meaning": ERROR_GUIDE.get(src.last_error_class, ("", ""))[0], "error_fix": ERROR_GUIDE.get(src.last_error_class, ("", ""))[1],
-        "totals": {"stored": src.total_stored, "duplicates": src.total_duplicates, "rejected": src.total_rejected},
+        "totals": {"updated": int(db.scalar(select(func.coalesce(func.sum(IngestRun.updated), 0)).where(IngestRun.source_id == src.id)) or 0), "stored": src.total_stored, "duplicates": src.total_duplicates, "rejected": src.total_rejected},
         "runs_24h": {status: n for status, n, _ in runs24}, "stored_24h": int(sum(stored for _, _, stored in runs24)),
         "dead_letters": db.scalar(select(func.count()).select_from(DeadLetter).where(DeadLetter.source_id == src.id)) or 0,
         "recent": [r.status for r in reversed(recent)],
@@ -67,7 +69,7 @@ def source_view(db: Session, src: IngestSource, detail: bool = False) -> dict:
 
 def run_view(r: IngestRun) -> dict:
     return {"id": r.id, "trigger": r.trigger, "status": r.status, "fetched": r.fetched, "stored": r.stored, "duplicates": r.duplicates,
-            "rejected": r.rejected, "attempts": r.attempts, "http_status": r.http_status, "error_class": r.error_class, "error": r.error,
+            "updated": r.updated or 0, "rejected": r.rejected, "attempts": r.attempts, "http_status": r.http_status, "error_class": r.error_class, "error": r.error,
             "duration_ms": r.duration_ms, "watermark_before": r.watermark_before, "watermark_after": r.watermark_after,
             "started_at": iso(r.started_at), "finished_at": iso(r.finished_at)}
 
@@ -117,19 +119,40 @@ async def run_now(sid: str, p: Principal = Depends(require_role("user")), db: Se
 class SourcePatch(BaseModel):
     enabled: bool | None = None
     interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+    cron: str | None = Field(default=None, max_length=64)  # "" switches back to the interval
 
 
 @router.patch("/sources/{sid}")
 def update_source(sid: str, body: SourcePatch, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
     src = _owned(db, p, sid)
     changes = body.model_dump(exclude_none=True)
+    if "cron" in changes:
+        changes["cron"] = changes["cron"].strip()
+        if changes["cron"]:
+            try:
+                cron.parse(changes["cron"])
+            except cron.CronError as e:
+                raise HTTPException(422, f"Invalid cron expression: {e}")
+        changes["cron"] = changes["cron"] or None
     for k, v in changes.items():
         setattr(src, k, v)
+    if "cron" in changes or "interval_minutes" in changes:
+        src.next_run_at = ingest._next_run(src)
     if changes.get("enabled"):
         src.next_run_at, src.consecutive_failures = utcnow(), 0
     audit.record(db, p.org_id, p, "source.update", f"{src.integration_id}.{src.operation_id}", **changes)
     db.commit()
     return source_view(db, src)
+
+
+@router.post("/sources/{sid}/test")
+async def test_source(sid: str, p: Principal = Depends(require_role("user")), db: Session = Depends(get_db)):
+    """Fetch one page and show how it would be normalised. Nothing is stored and the schedule is untouched."""
+    src = _owned(db, p, sid)
+    try:
+        return await run_in_threadpool(ingest.test_source, db, src)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
 
 
 @router.post("/sources/{sid}/reset")
@@ -143,7 +166,9 @@ def reset_source(sid: str, p: Principal = Depends(require_human("admin")), db: S
 
 
 def event_view(e: NormalizedEvent, full: bool = False) -> dict:
-    out = {"id": e.id, "source": e.source, "event_id": e.event_id, "timestamp": iso(e.timestamp), "category": e.category, "action": e.action,
+    out = {"id": e.id, "source": e.source, "event_id": e.event_id, "fetched_at": iso(e.ingested_at),
+           "type": e.category or e.action, "description": e.message or e.action,  # names used by the common Event/Alert schema
+           "timestamp": iso(e.timestamp), "category": e.category, "action": e.action,
            "actor": e.actor, "target": e.target, "outcome": e.outcome, "severity": e.severity, "message": e.message}
     if full:
         out["raw"] = e.raw
@@ -219,3 +244,37 @@ def dismiss(did: str, p: Principal = Depends(require_role("admin")), db: Session
     audit.record(db, p.org_id, p, "deadletter.dismiss", did)
     db.commit()
     return {"ok": True}
+
+
+ENTITY_VIEWS = {"user": (NormalizedUser, ("name", "email", "status")), "device": (NormalizedDevice, ("hostname", "ip", "os", "owner"))}
+
+
+def entity_view(row, kind: str) -> dict:
+    out = {"id": row.id, "external_id": row.external_id, "source": row.source, "fetched_at": iso(row.fetched_at), "first_seen_at": iso(row.first_seen_at)}
+    for f in ENTITY_VIEWS[kind][1]:
+        out[f] = getattr(row, f)
+    out["last_login" if kind == "user" else "last_seen"] = iso(row.last_login if kind == "user" else row.last_seen)
+    return out
+
+
+@router.get("/entities/{kind}")
+def list_entities(kind: str, source: str | None = None, q: str | None = Query(None, max_length=100), status: str | None = None,
+                  limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), p: Principal = Depends(current_principal),
+                  db: Session = Depends(get_db)):
+    """The common User and Device tables: one row per account/device across every source."""
+    if kind not in ENTITY_VIEWS:
+        raise HTTPException(404, "Unknown entity; use user or device")
+    model, fields = ENTITY_VIEWS[kind]
+    cond = [model.organization_id == p.org_id]
+    if source:
+        cond.append(model.source == source)
+    if status and kind == "user":
+        cond.append(model.status == status)
+    if q:
+        like = f"%{q.replace('%', '').replace('_', '')}%"
+        cond.append(or_(*[getattr(model, f).ilike(like) for f in fields]))
+    total = db.scalar(select(func.count()).select_from(model).where(*cond)) or 0
+    order = model.last_login if kind == "user" else model.last_seen
+    rows = db.scalars(select(model).where(*cond).order_by(order.desc().nullslast(), model.fetched_at.desc()).limit(limit).offset(offset)).all()
+    by_source = db.execute(select(model.source, func.count()).where(model.organization_id == p.org_id).group_by(model.source)).all()
+    return {"total": total, "items": [entity_view(r, kind) for r in rows], "sources": {s: n for s, n in by_source}}

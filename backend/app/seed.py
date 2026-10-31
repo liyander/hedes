@@ -48,7 +48,7 @@ def seed_ai_providers(db: Session) -> None:
 
 
 def _publish_seed(db: Session, org: Organization, builder: User, admin: User, slug: str) -> None:
-    integ, v = integrations.create_integration(db, org.id, builder, catalog.known_services()[slug], "seed",
+    integ, v = integrations.create_integration(db, org.id, builder, {**catalog.known_services(), **catalog.demo_services()}[slug], "seed",
                                                notes="Reference integration installed with the platform")
     integrations.run_tests(db, v, builder)
     req = ApprovalRequest(organization_id=org.id, integration_id=integ.id, version_id=v.id, config_hash=v.config_hash,
@@ -62,10 +62,10 @@ def _publish_seed(db: Session, org: Organization, builder: User, admin: User, sl
     audit.record(db, org.id, "setup", "integration.publish", f"{slug}@{v.version}", seeded=True)
 
 
-DEMO_SOURCES = [  # (slug, connection name, auth type, secret)
-    ("okta", "okta", "ssws", {"token": OKTA_TOKEN}),
-    ("aws-cloudtrail", "aws-cloudtrail", "aws_sigv4", {"access_key_id": AWS_ACCESS_KEY, "secret_access_key": AWS_SECRET_KEY}),
-    ("firewall", "firewall", "api_key_header", {"api_key": FIREWALL_KEY}),
+DEMO_SOURCES = [  # (slug, connection name, auth type, secret) - only installed in DEMO_MODE, against the bundled mock APIs
+    ("demo-okta", "demo-okta", "ssws", {"token": OKTA_TOKEN}),
+    ("demo-aws-cloudtrail", "demo-aws-cloudtrail", "aws_sigv4", {"access_key_id": AWS_ACCESS_KEY, "secret_access_key": AWS_SECRET_KEY}),
+    ("demo-firewall", "demo-firewall", "api_key_header", {"api_key": FIREWALL_KEY}),
 ]
 
 
@@ -74,7 +74,7 @@ def ensure_demo_sources(db: Session) -> None:
     org = db.scalars(select(Organization).order_by(Organization.created_at)).first()
     builder = db.scalars(select(User).where(User.username == "builder")).first()
     admin = db.scalars(select(User).where(User.username == "admin")).first()
-    if not (org and builder and admin) or (org.policy or {}).get("demo_sources_seeded"):
+    if not get_settings().demo_mode or not (org and builder and admin) or (org.policy or {}).get("demo_sources_seeded"):
         return
     for slug, conn_name, auth_type, secret in DEMO_SOURCES:
         if not db.scalars(select(Connection).where(Connection.organization_id == org.id, Connection.name == conn_name)).first():
@@ -107,12 +107,13 @@ def run(db: Session) -> None:
         db.flush()
         db.add(Membership(user_id=u.id, organization_id=org.id, role=role))
         users[role] = u
-    db.add(Connection(organization_id=org.id, name="notify", auth_type="api_key_header",
-                      secret_ref=vault.store_secret(db, org.id, {"api_key": NOTIFY_KEY}), hint=vault.mask(NOTIFY_KEY),
-                      created_by=users["admin"].id))
-    db.flush()
-    for slug in ("github", "slack", "notify"):
-        _publish_seed(db, org, users["user"], users["admin"], slug)
+    if s.demo_mode:
+        db.add(Connection(organization_id=org.id, name="notify", auth_type="api_key_header",
+                          secret_ref=vault.store_secret(db, org.id, {"api_key": NOTIFY_KEY}), hint=vault.mask(NOTIFY_KEY),
+                          created_by=users["admin"].id))
+        db.flush()
+        for slug in ("github", "slack", "notify"):
+            _publish_seed(db, org, users["user"], users["admin"], slug)
     audit.record(db, org.id, "setup", "platform.seed", org.name)
     db.commit()
     ensure_demo_sources(db)

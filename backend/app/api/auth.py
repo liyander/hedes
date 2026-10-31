@@ -116,7 +116,7 @@ def current_org(p: Principal = Depends(current_principal), db: Session = Depends
     org = db.get(Organization, p.org_id)
     members = db.execute(select(Membership, User).join(User, Membership.user_id == User.id)
                          .where(Membership.organization_id == p.org_id).order_by(User.username)).all()
-    out = {"id": org.id, "name": org.name, "policy": org.policy,
+    out = {"id": org.id, "name": org.name, "policy": {k: v for k, v in (org.policy or {}).items() if k != "notifications"},
            "members": [{"id": m.id, "user_id": u.id, "username": u.username, "name": u.name, "email": u.email, "role": m.role, "status": u.status}
                        for m, u in members]}
     if p.at_least("admin"):
@@ -164,6 +164,8 @@ class PolicyIn(BaseModel):
     ai_monthly_budget_usd: float | None = Field(default=None, ge=0, le=100000)
     require_tests: bool | None = None
     repair_after_failures: int | None = Field(default=None, ge=1, le=50)
+    credential_rotation_days: int | None = Field(default=None, ge=7, le=730)
+    source_failure_alert_after: int | None = Field(default=None, ge=1, le=20)
 
 
 @router.patch("/organizations/current/policy")
@@ -177,7 +179,7 @@ def update_policy(body: PolicyIn, p: Principal = Depends(require_human("admin"))
     org.policy = {**(org.policy or {}), **changes}
     audit.record(db, p.org_id, p, "policy.update", org.name, **changes)
     db.commit()
-    return org.policy
+    return {k: v for k, v in org.policy.items() if k != "notifications"}
 
 
 # ------------------------------------------------------------------------------------ API tokens

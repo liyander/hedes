@@ -9,10 +9,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import ai, approvals, auth, connections, integrations, runtime, sources, workflows
+from .api import ai, approvals, assistant, auth, connections, integrations, notifications, runtime, sources, templates, workflows
 from .core.config import STATIC_DIR, get_settings
 from .core.db import init_db, session_scope
 from .mock import services as mock_services
+from .services import notify  # noqa: F401  (registers the alert-delivery hooks)
 from .services.ingest import scheduler_loop as ingest_scheduler_loop
 from .services.workflows import scheduler_loop
 
@@ -38,8 +39,10 @@ app = FastAPI(title="H.E.D.E.S", version="1.0.0", lifespan=lifespan,
               description="AI-assisted, configuration-driven integration platform with admin-governed activation.")
 
 for r in (auth.router, ai.router, integrations.router, approvals.router, connections.router, runtime.router,
-          runtime.mcp_router, sources.router, workflows.router, workflows.hooks_router, mock_services.router):
+          runtime.mcp_router, notifications.router, assistant.router, sources.router, templates.router, workflows.router, workflows.hooks_router):
     app.include_router(r)
+if get_settings().demo_mode:
+    app.include_router(mock_services.router)
 
 CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; "
        "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")

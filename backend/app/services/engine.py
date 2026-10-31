@@ -365,7 +365,7 @@ def _encode_body(req: PreparedRequest) -> bytes:
     return b""
 
 
-def _send(client: httpx.Client, req: PreparedRequest, timeout: float, body: bytes = b"") -> tuple[int, dict, bytes]:
+def _send(client: httpx.Client, req: PreparedRequest, timeout: float, body: bytes = b"", max_bytes: int = MAX_RESPONSE_BYTES) -> tuple[int, dict, bytes]:
     kwargs: dict = {"params": req.query, "headers": req.headers, "timeout": timeout}
     if body:
         kwargs["content"] = body
@@ -373,8 +373,8 @@ def _send(client: httpx.Client, req: PreparedRequest, timeout: float, body: byte
         buf = bytearray()
         for chunk in r.iter_bytes():
             buf.extend(chunk)
-            if len(buf) > MAX_RESPONSE_BYTES:
-                raise EngineError("response_too_large", "Response exceeded 2 MB", r.status_code)
+            if len(buf) > max_bytes:
+                raise EngineError("response_too_large", f"Response exceeded {max_bytes // (1024 * 1024) or 1} MB", r.status_code)
         return r.status_code, dict(r.headers), bytes(buf)
 
 
@@ -436,84 +436,90 @@ def execute(config: dict, op_id: str, inputs: dict, *, credential: dict | None =
         with httpx.Client(transport=transport, follow_redirects=False) as client:
             if auth.get("type") == "oauth2_client_credentials":
                 req.headers["Authorization"] = "Bearer " + _fetch_oauth_token(client, auth, secret, timeout, egress_check)
-            while pages_left > 0:
-                if pag and pag["type"] == "page":
-                    req.query[pag.get("page_param", "page")] = str(page_no)
-                    if pag.get("size_param"):
+            partial: EngineError | None = None
+            try:
+                while pages_left > 0:
+                    if pag and pag["type"] == "page":
+                        req.query[pag.get("page_param", "page")] = str(page_no)
+                        if pag.get("size_param"):
+                            req.query[pag["size_param"]] = str(pag.get("size", 50))
+                    elif pag and pag["type"] == "offset":
+                        req.query[pag["offset_param"]] = str(offset)
                         req.query[pag["size_param"]] = str(pag.get("size", 50))
-                elif pag and pag["type"] == "offset":
-                    req.query[pag["offset_param"]] = str(offset)
-                    req.query[pag["size_param"]] = str(pag.get("size", 50))
-                elif pag and pag["type"] == "cursor" and cursor is not None:
-                    req.query[pag["cursor_param"]] = str(cursor)
-                body_bytes = _encode_body(req)
+                    elif pag and pag["type"] == "cursor" and cursor is not None:
+                        req.query[pag["cursor_param"]] = str(cursor)
+                    body_bytes = _encode_body(req)
 
-                status, headers, raw_body = 0, {}, b""
-                for attempt in range(1, max_attempts + 1):
-                    result.attempts += 1
-                    if rpm:
-                        throttled += _throttle(throttle_key, int(rpm))
-                    if auth.get("type") == "aws_sigv4":
-                        _sign_request(req, auth, secret, body_bytes)
-                    try:
-                        status, headers, raw_body = _send(client, req, timeout, body_bytes)
-                    except httpx.TimeoutException:
-                        if attempt == max_attempts:
-                            raise EngineError("timeout", f"No response within {timeout:g}s")
-                    except httpx.TransportError as e:
-                        if attempt == max_attempts:
-                            raise EngineError("network_error", f"{type(e).__name__}: {str(e)[:200]}")
+                    status, headers, raw_body = 0, {}, b""
+                    for attempt in range(1, max_attempts + 1):
+                        result.attempts += 1
+                        if rpm:
+                            throttled += _throttle(throttle_key, int(rpm))
+                        if auth.get("type") == "aws_sigv4":
+                            _sign_request(req, auth, secret, body_bytes)
+                        try:
+                            status, headers, raw_body = _send(client, req, timeout, body_bytes, int(resp_cfg.get("max_bytes") or MAX_RESPONSE_BYTES))
+                        except httpx.TimeoutException:
+                            if attempt == max_attempts:
+                                raise EngineError("timeout", f"No response within {timeout:g}s")
+                        except httpx.TransportError as e:
+                            if attempt == max_attempts:
+                                raise EngineError("network_error", f"{type(e).__name__}: {str(e)[:200]}")
+                        else:
+                            if status not in RETRYABLE_STATUS or attempt == max_attempts:
+                                break
+                        wait = retry_wait(attempt, backoff, headers, max_wait, bool(jitter))
+                        waits.append(round(wait, 3))
+                        _sleep(wait)
+
+                    result.http_status = status
+                    if status == 401 and auth.get("type") == "oauth2_client_credentials":
+                        with _TOKEN_LOCK:
+                            _TOKEN_CACHE.pop(_token_key(auth, secret), None)  # force a fresh token next run
+                    if status not in expected:
+                        cls = _classify_status(status)
+                        detail = raw_body[:300].decode("utf-8", "replace").strip()
+                        raise EngineError(cls, f"HTTP {status}" + (f": {detail}" if detail else ""), status)
+                    if (resp_cfg.get("format") or "json") == "text":
+                        body: Any = {"text": raw_body.decode("utf-8", "replace")}
+                    elif not raw_body.strip():
+                        body = {}
                     else:
-                        if status not in RETRYABLE_STATUS or attempt == max_attempts:
+                        try:
+                            body = json.loads(raw_body)
+                        except ValueError:
+                            raise EngineError("response_invalid", "Response body is not valid JSON", status)
+                    if first_body is None:
+                        first_body = body
+                    pages += 1
+                    if not pag:
+                        break
+                    found, items = jsonpath.query(body, resp_cfg["items_path"])
+                    items = items if found and isinstance(items, list) else []
+                    collected.extend(items)
+                    pages_left -= 1
+                    if pag["type"] == "page":
+                        if len(items) < int(pag.get("size", 50)) or not items:
                             break
-                    wait = retry_wait(attempt, backoff, headers, max_wait, bool(jitter))
-                    waits.append(round(wait, 3))
-                    _sleep(wait)
-
-                result.http_status = status
-                if status == 401 and auth.get("type") == "oauth2_client_credentials":
-                    with _TOKEN_LOCK:
-                        _TOKEN_CACHE.pop(_token_key(auth, secret), None)  # force a fresh token next run
-                if status not in expected:
-                    cls = _classify_status(status)
-                    detail = raw_body[:300].decode("utf-8", "replace").strip()
-                    raise EngineError(cls, f"HTTP {status}" + (f": {detail}" if detail else ""), status)
-                if (resp_cfg.get("format") or "json") == "text":
-                    body: Any = {"text": raw_body.decode("utf-8", "replace")}
-                elif not raw_body.strip():
-                    body = {}
-                else:
-                    try:
-                        body = json.loads(raw_body)
-                    except ValueError:
-                        raise EngineError("response_invalid", "Response body is not valid JSON", status)
-                if first_body is None:
-                    first_body = body
-                pages += 1
-                if not pag:
-                    break
-                found, items = jsonpath.query(body, resp_cfg["items_path"])
-                items = items if found and isinstance(items, list) else []
-                collected.extend(items)
-                pages_left -= 1
-                if pag["type"] == "page":
-                    if len(items) < int(pag.get("size", 50)) or not items:
-                        break
-                    page_no += 1
-                elif pag["type"] == "offset":
-                    offset += len(items)
-                    total_ok, total = jsonpath.query(body, pag["total_path"]) if pag.get("total_path") else (False, None)
-                    if not items or len(items) < int(pag.get("size", 50)) or (total_ok and isinstance(total, int) and offset >= total):
-                        break
-                elif pag["type"] == "link":
-                    nxt = _next_link(headers, req.url)
-                    if not nxt:
-                        break
-                    req.query.update(dict(parse_qsl(urlsplit(nxt).query)))
-                else:
-                    ok, cursor = jsonpath.query(body, pag["next_cursor_path"])
-                    if not ok or cursor in (None, ""):
-                        break
+                        page_no += 1
+                    elif pag["type"] == "offset":
+                        offset += len(items)
+                        total_ok, total = jsonpath.query(body, pag["total_path"]) if pag.get("total_path") else (False, None)
+                        if not items or len(items) < int(pag.get("size", 50)) or (total_ok and isinstance(total, int) and offset >= total):
+                            break
+                    elif pag["type"] == "link":
+                        nxt = _next_link(headers, req.url)
+                        if not nxt or not items:  # some APIs (Okta System Log) keep offering a next link after the last page
+                            break
+                        req.query.update(dict(parse_qsl(urlsplit(nxt).query)))
+                    else:
+                        ok, cursor = jsonpath.query(body, pag["next_cursor_path"])
+                        if not ok or cursor in (None, ""):
+                            break
+            except EngineError as e:
+                if not (raw and pag and collected):
+                    raise
+                partial = e  # keep the pages already fetched; the caller decides what to do with an incomplete run
 
         result.diagnostics = {"response_shape": jsonpath.shape(first_body), "pages": pages}
         if waits:
@@ -527,7 +533,11 @@ def execute(config: dict, op_id: str, inputs: dict, *, credential: dict | None =
                 if not found:
                     raise EngineError("response_drift", f"Records not found at {resp_cfg.get('items_path')}", result.http_status)
             result.output = {"items": collected, "count": len(collected)}
-            result.status = "succeeded"
+            if partial:
+                result.status, result.error_class, result.error = "partial", partial.error_class, str(partial)
+                result.http_status = partial.http_status or result.http_status
+            else:
+                result.status = "succeeded"
         else:
             if pag:
                 items_cfg = {**resp_cfg, "items_path": "$"}

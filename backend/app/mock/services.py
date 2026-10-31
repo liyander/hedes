@@ -235,7 +235,7 @@ def emit(counts: dict) -> dict:
             feed = STATE["feeds"][key]
             base = len(feed) + 1000
             for k in range(n):
-                feed.append(fn(base + k, time.time() - (n - k) * 2))
+                feed.append(fn(base + k, time.time() + k * 0.01))  # newer than anything already ingested
             made[name] = n
     return made
 

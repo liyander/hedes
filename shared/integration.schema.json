@@ -326,6 +326,11 @@
               "items": {
                 "type": "string"
               }
+            },
+            "max_bytes": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 20000000
             }
           }
         },
@@ -343,20 +348,83 @@
             "fields": {
               "type": "object",
               "minProperties": 1,
-              "additionalProperties": {
-                "type": "string"
-              },
               "propertyNames": {
                 "enum": [
                   "event_id",
                   "timestamp",
-                  "actor",
+                  "category",
                   "action",
+                  "actor",
                   "target",
                   "outcome",
                   "severity",
                   "message",
-                  "category"
+                  "id",
+                  "name",
+                  "email",
+                  "status",
+                  "last_login",
+                  "hostname",
+                  "ip",
+                  "os",
+                  "owner",
+                  "last_seen"
+                ]
+              },
+              "additionalProperties": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "paths": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "maxItems": 6
+                      },
+                      "sep": {
+                        "type": "string",
+                        "maxLength": 8
+                      },
+                      "default": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "transform": {
+                        "enum": [
+                          "lower",
+                          "upper",
+                          "trim",
+                          "title",
+                          "iso_date",
+                          "number",
+                          "first",
+                          "join_list",
+                          "thresholds"
+                        ]
+                      },
+                      "thresholds": {
+                        "type": "array",
+                        "items": {
+                          "type": "array",
+                          "minItems": 2,
+                          "maxItems": 2
+                        }
+                      }
+                    }
+                  }
                 ]
               }
             },
@@ -370,10 +438,25 @@
               },
               "propertyNames": {
                 "enum": [
+                  "event_id",
+                  "timestamp",
+                  "category",
+                  "action",
+                  "actor",
+                  "target",
                   "outcome",
                   "severity",
-                  "category",
-                  "action"
+                  "message",
+                  "id",
+                  "name",
+                  "email",
+                  "status",
+                  "last_login",
+                  "hostname",
+                  "ip",
+                  "os",
+                  "owner",
+                  "last_seen"
                 ]
               }
             },
@@ -384,13 +467,25 @@
               },
               "propertyNames": {
                 "enum": [
-                  "actor",
+                  "event_id",
+                  "timestamp",
+                  "category",
                   "action",
+                  "actor",
                   "target",
                   "outcome",
                   "severity",
                   "message",
-                  "category"
+                  "id",
+                  "name",
+                  "email",
+                  "status",
+                  "last_login",
+                  "hostname",
+                  "ip",
+                  "os",
+                  "owner",
+                  "last_seen"
                 ]
               }
             },
@@ -408,14 +503,20 @@
                 "format": {
                   "enum": [
                     "iso8601",
+                    "iso8601_millis",
                     "epoch_seconds",
-                    "epoch_millis"
+                    "epoch_millis",
+                    "date"
                   ]
                 },
                 "overlap_seconds": {
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 86400
+                },
+                "end_param": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_.-]{1,64}$"
                 }
               }
             },
@@ -427,8 +528,20 @@
                   "type": "integer",
                   "minimum": 1,
                   "maximum": 1440
+                },
+                "cron": {
+                  "type": "string",
+                  "pattern": "^\\S+( \\S+){4}$",
+                  "maxLength": 64
                 }
               }
+            },
+            "entity": {
+              "enum": [
+                "event",
+                "user",
+                "device"
+              ]
             }
           }
         }

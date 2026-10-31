@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+from ..core.config import get_settings
 from ..core.db import get_db
 from ..core.security import Principal, current_principal, require_human, require_role
 from ..mock import services as mock
@@ -249,9 +250,14 @@ class DriftIn(BaseModel):
     enabled: bool = Field(...)
 
 
+def _demo_only() -> None:
+    if not get_settings().demo_mode:
+        raise HTTPException(404, "Demo controls are disabled (DEMO_MODE is off)")
+
+
 @router.get("/demo/state")
 def demo_state(p: Principal = Depends(current_principal)):
-    return mock.snapshot()
+    return mock.snapshot() if get_settings().demo_mode else {"demo": False}
 
 
 class FeedIn(BaseModel):
@@ -262,7 +268,7 @@ class FeedIn(BaseModel):
 
 
 @router.post("/demo/feeds")
-def demo_feeds(body: FeedIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+def demo_feeds(body: FeedIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db), _=Depends(_demo_only)):
     """Add fresh records to the bundled Okta / CloudTrail / firewall mocks and optionally make the firewall rate-limit."""
     made = mock.emit(body.model_dump())
     if body.firewall_flaky is not None:
@@ -273,7 +279,7 @@ def demo_feeds(body: FeedIn, p: Principal = Depends(require_human("admin")), db:
 
 
 @router.post("/demo/drift")
-def demo_drift(body: DriftIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+def demo_drift(body: DriftIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db), _=Depends(_demo_only)):
     mock.set_drift(body.enabled)
     audit.record(db, p.org_id, p, "demo.drift", "TaskFlow mock API", enabled=body.enabled)
     db.commit()

@@ -1,14 +1,14 @@
 schema_version: "1.0"
 integration:
-  id: okta
-  name: Okta System Log
+  id: demo-okta
+  name: Demo Okta (mock)
   version: "1.0.0"
   transport: http
   description: Pulls the Okta System Log (logins, MFA and policy changes) into the common event format. Bundled mock.
   base_url: ${PUBLIC_BASE_URL}/mock/okta
   authentication:
     type: ssws
-    credential_ref: okta
+    credential_ref: demo-okta
   rate_limit: {requests_per_minute: 120}
   operations:
     - id: list_system_log

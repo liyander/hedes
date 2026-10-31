@@ -1,14 +1,14 @@
 schema_version: "1.0"
 integration:
-  id: aws-cloudtrail
-  name: AWS CloudTrail
+  id: demo-aws-cloudtrail
+  name: Demo AWS CloudTrail (mock)
   version: "1.0.0"
   transport: http
   description: Pulls CloudTrail management events into the common event format. Requests are signed with AWS Signature V4. Bundled mock.
   base_url: ${PUBLIC_BASE_URL}/mock/aws/cloudtrail
   authentication:
     type: aws_sigv4
-    credential_ref: aws-cloudtrail
+    credential_ref: demo-aws-cloudtrail
     region: us-east-1
     service: cloudtrail
   rate_limit: {requests_per_minute: 120}

@@ -1,7 +1,7 @@
 schema_version: "1.0"
 integration:
-  id: firewall
-  name: Perimeter Firewall Logs
+  id: demo-firewall
+  name: Demo Firewall (mock)
   version: "1.0.0"
   transport: http
   description: Pulls traffic logs from a firewall management API into the common event format. Offset pagination, rate limiting and malformed records. Bundled mock.
@@ -9,7 +9,7 @@ integration:
   authentication:
     type: api_key_header
     header_name: X-API-Key
-    credential_ref: firewall
+    credential_ref: demo-firewall
   rate_limit: {requests_per_minute: 60}
   operations:
     - id: list_traffic_logs

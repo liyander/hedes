@@ -1,0 +1,55 @@
+template:
+  id: abuseipdb
+  title: AbuseIPDB blacklist
+  category: Threat intelligence
+  summary: The most-reported malicious IP addresses (confidence ≥ 90) as alert events.
+  free_tier: AbuseIPDB free plan (the blacklist endpoint allows a handful of calls per day).
+  docs: https://docs.abuseipdb.com/#blacklist-endpoint
+  credential:
+    type: api_key_header
+    name: abuseipdb
+    header: Key
+    how: Register at abuseipdb.com, open Account → API and create a key. In Credentials choose "API key (header)"; the header name is Key.
+  variables: []
+  setup:
+    - Create an AbuseIPDB API key.
+    - Connect it in Credentials (API key header) with the name abuseipdb.
+    - The free plan allows very few blacklist calls per day, so this runs once a day.
+schema_version: "1.0"
+integration:
+  id: abuseipdb
+  name: AbuseIPDB blacklist
+  version: "1.0.0"
+  transport: http
+  description: High-confidence malicious IP addresses from AbuseIPDB in the common alert format.
+  base_url: https://api.abuseipdb.com
+  default_headers: {Accept: application/json}
+  authentication:
+    type: api_key_header
+    header_name: Key
+    credential_ref: abuseipdb
+  operations:
+    - id: list_blacklist
+      description: Blacklisted IP addresses
+      method: GET
+      path: /api/v2/blacklist
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {confidenceMinimum: "90", limit: "1000"}
+      retry: {max_attempts: 3, backoff_seconds: 5, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$.data"
+      ingest:
+        entity: event
+        category: threat_intel
+        fields:
+          event_id: {paths: ["$.ipAddress", "$.lastReportedAt"], sep: "@"}
+          timestamp: "$.lastReportedAt"
+          actor: "$.ipAddress"
+          severity: {path: "$.abuseConfidenceScore", transform: thresholds, thresholds: [[99, critical], [95, high], [90, medium], [0, low]]}
+          message: "$.countryCode"
+        defaults: {action: reported_malicious_ip, outcome: unknown}
+        schedule: {cron: "30 5 * * *"}

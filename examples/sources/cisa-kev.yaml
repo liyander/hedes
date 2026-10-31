@@ -1,0 +1,47 @@
+template:
+  id: cisa-kev
+  title: CISA Known Exploited Vulnerabilities
+  category: Vulnerabilities
+  summary: Every CVE that CISA has confirmed is being exploited in the wild, as alert events. Free, no account and no key.
+  free_tier: Free and unauthenticated.
+  docs: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+  credential: null
+  variables: []
+  setup:
+    - This feed needs no account or credential.
+    - The data is read from CISA's official GitHub mirror (cisagov/kev-data). To read cisa.gov directly, edit the base URL to https://www.cisa.gov and the path to /sites/default/files/feeds/known_exploited_vulnerabilities.json.
+schema_version: "1.0"
+integration:
+  id: cisa-kev
+  name: CISA Known Exploited Vulnerabilities
+  version: "1.0.0"
+  transport: http
+  description: CISA's catalogue of vulnerabilities known to be exploited in the wild, mapped to the common alert format.
+  base_url: https://raw.githubusercontent.com
+  authentication:
+    type: none
+  operations:
+    - id: list_known_exploited
+      description: Read the full Known Exploited Vulnerabilities catalogue
+      method: GET
+      path: /cisagov/kev-data/develop/known_exploited_vulnerabilities.json
+      input_schema:
+        type: object
+        properties: {}
+      retry: {max_attempts: 3, backoff_seconds: 2}
+      response:
+        status_codes: [200]
+        items_path: "$.vulnerabilities"
+        max_bytes: 12000000
+      ingest:
+        entity: event
+        category: vulnerability
+        fields:
+          event_id: "$.cveID"
+          timestamp: "$.dateAdded"
+          actor: "$.vendorProject"
+          action: "$.vulnerabilityName"
+          target: "$.product"
+          message: "$.shortDescription"
+        defaults: {severity: high, outcome: unknown}
+        schedule: {cron: "0 */6 * * *"}

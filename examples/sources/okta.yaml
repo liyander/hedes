@@ -1,0 +1,85 @@
+template:
+  id: okta
+  title: Okta
+  category: Identity
+  summary: Okta users (with last login) and the System Log (sign-ins, MFA changes, policy updates).
+  free_tier: Okta Integrator Free Plan.
+  docs: https://developer.okta.com/docs/reference/api/system-log/
+  credential:
+    type: ssws
+    name: okta
+    how: Okta Admin Console → Security → API → Tokens → Create token. The token inherits your admin rights, so use a read-only admin account.
+  variables:
+    - {name: okta_domain, label: Okta domain, placeholder: dev-12345.okta.com, pattern: "^[A-Za-z0-9.-]{3,120}$", help: Host only, without https://}
+  setup:
+    - In the Okta Admin Console create an API token (Security → API → Tokens).
+    - Connect it in Credentials (type "Okta API token") with the name okta.
+    - Pagination follows the Link header; the System Log is read incrementally from the newest event already stored.
+schema_version: "1.0"
+integration:
+  id: okta
+  name: Okta
+  version: "1.0.0"
+  transport: http
+  description: Okta users and System Log events in the common user and event formats.
+  base_url: "https://{{okta_domain}}"
+  authentication:
+    type: ssws
+    credential_ref: okta
+  rate_limit: {requests_per_minute: 60}
+  operations:
+    - id: list_users
+      description: All Okta users
+      method: GET
+      path: /api/v1/users
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {limit: "200"}
+      pagination: {type: link, max_pages: 50}
+      retry: {max_attempts: 3, backoff_seconds: 1, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$"
+      ingest:
+        entity: user
+        fields:
+          id: "$.id"
+          name: {paths: ["$.profile.firstName", "$.profile.lastName"], sep: " "}
+          email: {path: "$.profile.email", transform: lower}
+          status: "$.status"
+          last_login: "$.lastLogin"
+        value_maps: {status: {ACTIVE: active, SUSPENDED: suspended, DEPROVISIONED: disabled, LOCKED_OUT: locked, STAGED: pending, PROVISIONED: pending, RECOVERY: active, PASSWORD_EXPIRED: active}}
+        schedule: {interval_minutes: 60}
+    - id: list_system_log
+      description: Okta System Log events
+      method: GET
+      path: /api/v1/logs
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {limit: "100"}
+      pagination: {type: link, max_pages: 30}
+      retry: {max_attempts: 3, backoff_seconds: 1, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$"
+      ingest:
+        entity: event
+        category: identity
+        fields:
+          event_id: "$.uuid"
+          timestamp: "$.published"
+          actor: "$.actor.alternateId"
+          action: "$.eventType"
+          target: "$.target[0].alternateId"
+          outcome: "$.outcome.result"
+          severity: "$.severity"
+          message: "$.displayMessage"
+        value_maps:
+          outcome: {SUCCESS: success, ALLOW: success, FAILURE: failure, DENY: failure, SKIPPED: unknown, UNKNOWN: unknown}
+          severity: {DEBUG: info, INFO: info, WARN: medium, ERROR: high}
+        incremental: {param: since, format: iso8601, overlap_seconds: 60}
+        schedule: {interval_minutes: 10}

@@ -11,7 +11,13 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 from ..core.config import SHARED_DIR
-from . import jsonpath, templates
+from . import cron, jsonpath, templates
+
+ENTITY_FIELD_NAMES = {
+    "event": ("event_id", "timestamp", "category", "action", "actor", "target", "outcome", "severity", "message"),
+    "user": ("id", "name", "email", "status", "last_login"),
+    "device": ("id", "hostname", "ip", "os", "owner", "last_seen"),
+}
 
 SAFE_BY_METHOD = {"GET": "read", "POST": "write", "PUT": "write", "PATCH": "write", "DELETE": "destructive"}
 FORBIDDEN_HEADERS = {"authorization", "cookie", "host", "content-length", "transfer-encoding", "connection",
@@ -131,16 +137,37 @@ def validate_config(config: dict) -> dict:
             required_inputs = set(op["input_schema"].get("required") or [])
             if required_inputs:
                 errors.append({"path": where + "/input_schema", "message": "Ingestion operations run unattended: inputs cannot be required"})
-            for name, path in (ing.get("fields") or {}).items():
-                try:
-                    jsonpath.parse(path)
-                except jsonpath.JSONPathError as e:
-                    errors.append({"path": where + f"/ingest/fields/{name}", "message": str(e)})
-            for need in ("timestamp", "action"):
-                if need not in (ing.get("fields") or {}) and need not in (ing.get("defaults") or {}):
-                    errors.append({"path": where + "/ingest/fields", "message": f"Common format needs a {need!r} mapping"})
-            if "event_id" not in (ing.get("fields") or {}):
+            entity = ing.get("entity") or "event"
+            allowed = ENTITY_FIELD_NAMES[entity]
+            fields = ing.get("fields") or {}
+            for name, fspec in fields.items():
+                if name not in allowed:
+                    errors.append({"path": where + f"/ingest/fields/{name}", "message": f"{name!r} is not a field of the {entity} format (allowed: {', '.join(allowed)})"})
+                    continue
+                paths = [fspec] if isinstance(fspec, str) else ([fspec["path"]] if fspec.get("path") else []) + list(fspec.get("paths") or [])
+                if not isinstance(fspec, str) and not paths:
+                    errors.append({"path": where + f"/ingest/fields/{name}", "message": "A field mapping needs path or paths"})
+                if not isinstance(fspec, str) and fspec.get("transform") == "thresholds" and not fspec.get("thresholds"):
+                    errors.append({"path": where + f"/ingest/fields/{name}", "message": "The thresholds transform needs a thresholds list, e.g. [[90, critical], [50, medium]]"})
+                for path in paths:
+                    try:
+                        jsonpath.parse(path)
+                    except jsonpath.JSONPathError as e:
+                        errors.append({"path": where + f"/ingest/fields/{name}", "message": str(e)})
+            required = {"event": ("timestamp", "action"), "user": ("id",), "device": ("id",)}[entity]
+            for need in required:
+                if need not in fields and need not in (ing.get("defaults") or {}):
+                    errors.append({"path": where + "/ingest/fields", "message": f"The {entity} format needs a {need!r} mapping"})
+            if entity == "event" and "event_id" not in fields:
                 warnings.append({"path": where + "/ingest/fields", "message": "No event_id mapping: records are de-duplicated by a hash of the raw record"})
+            if entity != "event" and ing.get("incremental"):
+                warnings.append({"path": where + "/ingest/incremental", "message": "Incremental sync follows event timestamps; users and devices are re-read in full and updated in place"})
+            cron_expr = (ing.get("schedule") or {}).get("cron")
+            if cron_expr:
+                try:
+                    cron.parse(cron_expr)
+                except cron.CronError as e:
+                    errors.append({"path": where + "/ingest/schedule/cron", "message": str(e)})
             if (ing.get("incremental") or {}).get("param") in (op.get("request") or {}).get("query", {}):
                 warnings.append({"path": where + "/ingest/incremental", "message": "The incremental parameter is also set in request.query and will be overwritten"})
         elif not resp.get("mapping"):

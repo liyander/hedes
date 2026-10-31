@@ -41,7 +41,7 @@ def no_sleep(monkeypatch):
 # --------------------------------------------------------------------------------------- normalisation
 
 def test_normalize_maps_values_and_coerces_timestamps():
-    rec, why = ingest.normalize({"id": 7, "at": 1_700_000_000, "who": "ana", "what": "login", "sev": "WARN", "res": "NO"}, SPEC, "okta")
+    rec, why = ingest.normalize({"id": 7, "at": 1_700_000_000, "who": "ana", "what": "login", "sev": "WARN", "res": "NO"}, SPEC, "demo-okta")
     assert not why
     assert rec["event_id"] == "7" and rec["severity"] == "medium" and rec["outcome"] == "failure" and rec["category"] == "identity"
     assert rec["timestamp"] == datetime(2023, 11, 14, 22, 13, 20)
@@ -149,7 +149,7 @@ def test_raw_mode_reports_missing_items_path_as_drift():
 
 def test_ssws_auth_header_and_redaction():
     seen = {}
-    c = cfg(auth={"type": "ssws", "credential_ref": "okta"})
+    c = cfg(auth={"type": "ssws", "credential_ref": "demo-okta"})
 
     def handler(req):
         seen["auth"] = req.headers["authorization"]
@@ -244,48 +244,49 @@ def _run(admin, src):
 
 def test_three_sources_ingest_into_one_common_format(server, admin):
     sources = _sources(admin)
-    assert set(sources) == {"okta", "aws-cloudtrail", "firewall"}
+    assert set(sources) == {"demo-okta", "demo-aws-cloudtrail", "demo-firewall"}
     assert {s["pagination"] for s in sources.values()} == {"link", "cursor", "offset"}
     assert {s["auth_type"] for s in sources.values()} == {"ssws", "aws_sigv4", "api_key_header"}
     assert all(s["health"] == "pending" for s in sources.values())
 
     first = {slug: _run(admin, s) for slug, s in sources.items()}
-    assert first["okta"]["stored"] == 48 and first["okta"]["rejected"] == 0
-    assert first["aws-cloudtrail"]["stored"] == 34
-    assert first["firewall"]["stored"] == 60 and first["firewall"]["rejected"] == 3 and first["firewall"]["status"] == "partial"
+    assert first["demo-okta"]["stored"] == 48 and first["demo-okta"]["rejected"] == 0
+    assert first["demo-aws-cloudtrail"]["stored"] == 34
+    assert first["demo-firewall"]["stored"] == 60 and first["demo-firewall"]["rejected"] == 3 and first["demo-firewall"]["status"] == "partial"
 
     ev = admin.get("/api/v1/events", params={"limit": 200}).json()
-    assert ev["total"] == 142 and ev["sources"] == {"okta": 48, "aws-cloudtrail": 34, "firewall": 60}
+    assert ev["total"] == 142 and ev["sources"] == {"demo-okta": 48, "demo-aws-cloudtrail": 34, "demo-firewall": 60}
     for e in ev["items"]:
         assert e["severity"] in ingest.SEVERITIES and e["outcome"] in ingest.OUTCOMES and e["timestamp"] and e["action"]
-    for slug in ("okta", "aws-cloudtrail", "firewall"):
+    for slug in ("demo-okta", "demo-aws-cloudtrail", "demo-firewall"):
         row = next(e for e in ev["items"] if e["source"] == slug)
         detail = admin.get(f"/api/v1/events/{row['id']}").json()
         assert detail["raw"] and detail["actor"] and detail["target"]  # the original record travels with the normalised one
-    assert any(e["outcome"] == "failure" for e in ev["items"] if e["source"] == "aws-cloudtrail")  # ErrorCode mapped via value_maps
-    assert any(e["severity"] == "critical" for e in ev["items"] if e["source"] == "firewall")
+    assert any(e["outcome"] == "failure" for e in ev["items"] if e["source"] == "demo-aws-cloudtrail")  # ErrorCode mapped via value_maps
+    assert any(e["severity"] == "critical" for e in ev["items"] if e["source"] == "demo-firewall")
 
     health = _sources(admin)
     assert all(s["health"] in ("healthy", "degraded") for s in health.values())
-    assert health["firewall"]["totals"]["rejected"] == 3 and health["firewall"]["dead_letters"] == 3
-    assert health["okta"]["watermark"]
+    assert health["demo-firewall"]["totals"]["rejected"] == 3 and health["demo-firewall"]["dead_letters"] == 3
+    assert health["demo-okta"]["watermark"]
 
 
 def test_incremental_runs_only_fetch_new_records_and_deduplicate(server, admin):
-    s = _sources(admin)["okta"]
-    before = admin.get("/api/v1/events", params={"source": "okta"}).json()["total"]
+    s = _sources(admin)["demo-okta"]
+    before = admin.get("/api/v1/events", params={"source": "demo-okta"}).json()["total"]
     again = _run(admin, s)
     assert again["stored"] == 0 and again["fetched"] <= 3 and again["duplicates"] == again["fetched"]  # only the overlap window is re-read
     assert again["watermark_before"] and again["watermark_after"] >= again["watermark_before"]
 
     assert admin.post("/api/v1/demo/feeds", json={"okta": 5, "aws": 4, "firewall": 6}).status_code == 200
-    runs = {slug: _run(admin, _sources(admin)[slug]) for slug in ("okta", "aws-cloudtrail", "firewall")}
-    assert runs["okta"]["stored"] == 5 and runs["aws-cloudtrail"]["stored"] == 4 and runs["firewall"]["stored"] == 6
-    assert admin.get("/api/v1/events", params={"source": "okta"}).json()["total"] == before + 5
+    runs = {slug: _run(admin, _sources(admin)[slug]) for slug in ("demo-okta", "demo-aws-cloudtrail", "demo-firewall")}
+    assert runs["demo-okta"]["stored"] == 5 and runs["demo-aws-cloudtrail"]["stored"] == 4 and runs["demo-firewall"]["stored"] == 6
+    assert admin.get("/api/v1/events", params={"source": "demo-okta"}).json()["total"] == before + 5
     # Full re-read after a reset: nothing is stored twice.
     assert admin.post(f"/api/v1/sources/{s['id']}/reset").status_code == 200
-    full = _run(admin, _sources(admin)["okta"])
+    full = _run(admin, _sources(admin)["demo-okta"])
     assert full["stored"] == 0 and full["duplicates"] == full["fetched"] > 40
+    assert full["watermark_after"]                                        # the high-water mark is restored even though nothing was new
 
 
 def test_dead_letters_are_parked_once_and_can_be_reprocessed_or_dismissed(server, admin):
@@ -293,10 +294,10 @@ def test_dead_letters_are_parked_once_and_can_be_reprocessed_or_dismissed(server
     assert dl["total"] == 3
     reasons = " ".join(" ".join(d["reasons"]) for d in dl["items"])
     assert "timestamp" in reasons and "action" in reasons
-    again = _run(admin, _sources(admin)["firewall"])                      # incremental pull no longer sees the garbage...
+    again = _run(admin, _sources(admin)["demo-firewall"])                      # incremental pull no longer sees the garbage...
     assert again["rejected"] == 0
-    assert admin.post(f"/api/v1/sources/{_sources(admin)['firewall']['id']}/reset").status_code == 200
-    _run(admin, _sources(admin)["firewall"])                              # ...and a full re-read does not park it twice
+    assert admin.post(f"/api/v1/sources/{_sources(admin)['demo-firewall']['id']}/reset").status_code == 200
+    _run(admin, _sources(admin)["demo-firewall"])                              # ...and a full re-read does not park it twice
     assert admin.get("/api/v1/dead-letters").json()["total"] == 3
 
     first = dl["items"][0]
@@ -309,11 +310,11 @@ def test_dead_letters_are_parked_once_and_can_be_reprocessed_or_dismissed(server
 def test_firewall_rate_limit_is_retried_transparently(server, admin):
     assert admin.post("/api/v1/demo/feeds", json={"firewall": 60, "firewall_flaky": True}).json()["firewall_flaky"] is True
     try:
-        run = _run(admin, _sources(admin)["firewall"])
-        assert run["status"] in ("succeeded", "partial") and run["stored"] == 60
+        run = _run(admin, _sources(admin)["demo-firewall"])
+        assert run["status"] in ("succeeded", "partial") and run["stored"] == 60, (run["error_class"], run["error"], run["fetched"], run["attempts"])
         pages = -(-run["fetched"] // 25)
         assert run["attempts"] > pages >= 3                              # at least one 429 was absorbed by a retry
-        ex = next(e for e in admin.get("/api/v1/executions", params={"limit": 20}).json() if e["tool"] == "firewall.list_traffic_logs")
+        ex = next(e for e in admin.get("/api/v1/executions", params={"limit": 20}).json() if e["tool"] == "demo-firewall.list_traffic_logs")
         assert ex["status"] == "succeeded"
     finally:
         admin.post("/api/v1/demo/feeds", json={"firewall_flaky": False})
@@ -321,35 +322,35 @@ def test_firewall_rate_limit_is_retried_transparently(server, admin):
 
 def test_auth_failures_surface_as_failing_health_with_guidance(server, admin):
     conns = {c["name"]: c for c in admin.get("/api/v1/connections").json()}
-    r = admin.put(f"/api/v1/connections/{conns['okta']['id']}/secret", json={"auth_type": "ssws", "token": "revoked-token-value"})
+    r = admin.put(f"/api/v1/connections/{conns['demo-okta']['id']}/secret", json={"auth_type": "ssws", "token": "revoked-token-value"})
     assert r.status_code == 200
-    src = _sources(admin)["okta"]
+    src = _sources(admin)["demo-okta"]
     run = _run(admin, src)
     assert run["status"] == "failed" and run["error_class"] == "auth_invalid"
     bad = admin.get(f"/api/v1/sources/{src['id']}").json()
     assert bad["health"] == "failing" and bad["error_fix"] and bad["consecutive_failures"] >= 1
     assert any(a["kind"] == "auth_invalid" for a in admin.get("/api/v1/alerts").json())
-    admin.put(f"/api/v1/connections/{conns['okta']['id']}/secret", json={"auth_type": "ssws", "token": "okta-demo-token"})
+    admin.put(f"/api/v1/connections/{conns['demo-okta']['id']}/secret", json={"auth_type": "ssws", "token": "okta-demo-token"})
     assert _run(admin, src)["status"] == "succeeded"
-    assert _sources(admin)["okta"]["health"] == "healthy"
+    assert _sources(admin)["demo-okta"]["health"] == "healthy"
 
 
 def test_sigv4_rejects_a_wrong_secret(server, admin):
     conns = {c["name"]: c for c in admin.get("/api/v1/connections").json()}
-    admin.put(f"/api/v1/connections/{conns['aws-cloudtrail']['id']}/secret",
+    admin.put(f"/api/v1/connections/{conns['demo-aws-cloudtrail']['id']}/secret",
               json={"auth_type": "aws_sigv4", "access_key_id": "AKIADEMOCLOUDTRAIL", "secret_access_key": "wrong"})
-    run = _run(admin, _sources(admin)["aws-cloudtrail"])
+    run = _run(admin, _sources(admin)["demo-aws-cloudtrail"])
     assert run["status"] == "failed" and run["error_class"] == "forbidden"
-    admin.put(f"/api/v1/connections/{conns['aws-cloudtrail']['id']}/secret",
+    admin.put(f"/api/v1/connections/{conns['demo-aws-cloudtrail']['id']}/secret",
               json={"auth_type": "aws_sigv4", "access_key_id": "AKIADEMOCLOUDTRAIL", "secret_access_key": "demo/aws/secret/access/key"})
-    assert _run(admin, _sources(admin)["aws-cloudtrail"])["status"] == "succeeded"
+    assert _run(admin, _sources(admin)["demo-aws-cloudtrail"])["status"] == "succeeded"
 
 
 def test_expired_credentials_are_flagged_and_not_used(server, admin):
-    c = next(c for c in admin.get("/api/v1/connections").json() if c["name"] == "firewall")
+    c = next(c for c in admin.get("/api/v1/connections").json() if c["name"] == "demo-firewall")
     past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     assert "expired" in admin.put(f"/api/v1/connections/{c['id']}/expiry", json={"expires_at": past}).json()["warnings"]
-    src = _sources(admin)["firewall"]
+    src = _sources(admin)["demo-firewall"]
     assert src["credential"]["status"] == "expired"
     run = _run(admin, src)
     assert run["status"] == "failed" and run["error_class"] == "credential_missing" and "expired" in run["error"]
@@ -363,7 +364,7 @@ def test_credential_hygiene_alerts_and_source_controls(server, admin):
     from app.core.db import session_scope
     with session_scope() as db:
         assert ingest.credential_hygiene(db) == 0
-    s = _sources(admin)["firewall"]
+    s = _sources(admin)["demo-firewall"]
     assert admin.patch(f"/api/v1/sources/{s['id']}", json={"enabled": False}).json()["health"] == "paused"
     assert admin.post(f"/api/v1/sources/{s['id']}/run").status_code == 409
     assert admin.patch(f"/api/v1/sources/{s['id']}", json={"enabled": True, "interval_minutes": 30}).json()["interval_minutes"] == 30

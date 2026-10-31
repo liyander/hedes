@@ -1,0 +1,83 @@
+template:
+  id: github-security
+  title: GitHub organisation security
+  category: Code & identity
+  summary: Organisation members (as users) and open Dependabot security alerts (as alert events).
+  free_tier: Free with any GitHub account (an organisation you can read).
+  docs: https://docs.github.com/en/rest/dependabot/alerts
+  credential:
+    type: bearer
+    name: github-security
+    how: GitHub → Settings → Developer settings → Personal access tokens. Grant read:org and security_events (classic) or the matching read permissions (fine-grained).
+  variables:
+    - {name: github_org, label: GitHub organisation, placeholder: my-company, pattern: "^[A-Za-z0-9-]{1,39}$", help: The organisation slug in github.com/<org>}
+  setup:
+    - Create a personal access token with read:org and security_events.
+    - Connect it in Credentials (type Bearer token) with the name github-security.
+    - Pagination follows GitHub's Link headers automatically.
+schema_version: "1.0"
+integration:
+  id: github-security
+  name: GitHub organisation security
+  version: "1.0.0"
+  transport: http
+  description: Members and Dependabot alerts of a GitHub organisation in the common user and alert formats.
+  base_url: https://api.github.com
+  default_headers:
+    Accept: application/vnd.github+json
+    X-GitHub-Api-Version: "2022-11-28"
+  authentication:
+    type: bearer
+    credential_ref: github-security
+    scopes: [read:org, security_events]
+  rate_limit: {requests_per_minute: 60}
+  operations:
+    - id: list_members
+      description: Members of the organisation
+      method: GET
+      path: "/orgs/{{github_org}}/members"
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {per_page: "100"}
+      pagination: {type: link, max_pages: 50}
+      retry: {max_attempts: 3, backoff_seconds: 2}
+      response:
+        status_codes: [200]
+        items_path: "$"
+      ingest:
+        entity: user
+        fields:
+          id: "$.id"
+          name: "$.login"
+          status: {path: "$.type", default: active}
+        value_maps: {status: {User: active, Bot: service}}
+        schedule: {interval_minutes: 360}
+    - id: list_dependabot_alerts
+      description: Open Dependabot alerts across the organisation
+      method: GET
+      path: "/orgs/{{github_org}}/dependabot/alerts"
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {state: open, per_page: "100"}
+      pagination: {type: link, max_pages: 50}
+      retry: {max_attempts: 3, backoff_seconds: 2}
+      response:
+        status_codes: [200]
+        items_path: "$"
+      ingest:
+        entity: event
+        category: vulnerability
+        fields:
+          event_id: "$.html_url"
+          timestamp: "$.created_at"
+          actor: "$.repository.full_name"
+          action: "$.security_advisory.summary"
+          target: "$.dependency.package.name"
+          severity: "$.security_vulnerability.severity"
+          message: "$.security_advisory.cve_id"
+        defaults: {outcome: unknown}
+        schedule: {interval_minutes: 60}

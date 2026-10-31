@@ -417,6 +417,7 @@ class IngestSource(Base):
     operation_id: Mapped[str] = mapped_column(String(100))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     interval_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    cron: Mapped[str | None] = mapped_column(String(64), nullable=True)  # when set, replaces the interval
     watermark: Mapped[str] = mapped_column(String(64), default="")  # newest canonical timestamp ingested so far
     state: Mapped[str] = mapped_column(String(16), default="never_run")  # never_run | running | ok | degraded | failing
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -441,6 +442,7 @@ class IngestRun(Base):
     fetched: Mapped[int] = mapped_column(Integer, default=0)
     stored: Mapped[int] = mapped_column(Integer, default=0)
     duplicates: Mapped[int] = mapped_column(Integer, default=0)
+    updated: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
     rejected: Mapped[int] = mapped_column(Integer, default=0)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -487,3 +489,81 @@ class DeadLetter(Base):
     raw: Mapped[dict] = mapped_column(JSON, default=dict)
     fingerprint: Mapped[str] = mapped_column(String(64), default="", index=True)  # same bad record is parked once, not every run
     created_at: Mapped[datetime] = created()
+
+
+class NormalizedUser(Base):
+    """Common 'user' shape. One row per external account; later runs update it in place (upsert)."""
+    __tablename__ = "normalized_users"
+    __table_args__ = (UniqueConstraint("organization_id", "integration_id", "external_id"),)
+    id: Mapped[str] = pk()
+    organization_id: Mapped[str] = fk("organizations.id")
+    integration_id: Mapped[str] = fk("integrations.id")
+    source_id: Mapped[str] = fk("ingest_sources.id")
+    source: Mapped[str] = mapped_column(String(64), index=True)
+    external_id: Mapped[str] = mapped_column(String(200))
+    name: Mapped[str] = mapped_column(String(255), default="")
+    email: Mapped[str] = mapped_column(String(255), default="", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="")
+    last_login: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    raw: Mapped[dict] = mapped_column(JSON, default=dict)
+    first_seen_at: Mapped[datetime] = created()
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class NormalizedDevice(Base):
+    __tablename__ = "normalized_devices"
+    __table_args__ = (UniqueConstraint("organization_id", "integration_id", "external_id"),)
+    id: Mapped[str] = pk()
+    organization_id: Mapped[str] = fk("organizations.id")
+    integration_id: Mapped[str] = fk("integrations.id")
+    source_id: Mapped[str] = fk("ingest_sources.id")
+    source: Mapped[str] = mapped_column(String(64), index=True)
+    external_id: Mapped[str] = mapped_column(String(200))
+    hostname: Mapped[str] = mapped_column(String(255), default="", index=True)
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    os: Mapped[str] = mapped_column(String(120), default="")
+    owner: Mapped[str] = mapped_column(String(255), default="")
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    raw: Mapped[dict] = mapped_column(JSON, default=dict)
+    first_seen_at: Mapped[datetime] = created()
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class AssistantThread(Base):
+    """A conversation with the platform assistant (separate from AI Studio build sessions)."""
+    __tablename__ = "assistant_threads"
+    id: Mapped[str] = pk()
+    organization_id: Mapped[str] = fk("organizations.id")
+    user_id: Mapped[str] = fk("users.id")
+    title: Mapped[str] = mapped_column(String(200), default="New conversation")
+    created_at: Mapped[datetime] = created()
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class AssistantMessage(Base):
+    __tablename__ = "assistant_messages"
+    id: Mapped[str] = pk()
+    thread_id: Mapped[str] = fk("assistant_threads.id")
+    role: Mapped[str] = mapped_column(String(16))  # user | assistant | system
+    content: Mapped[str] = mapped_column(Text)
+    tags: Mapped[list] = mapped_column(JSON, default=list)   # [{type, id, label}] the user attached with @
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)   # model, looked_up, page
+    created_at: Mapped[datetime] = created()
+
+
+class AssistantAction(Base):
+    """An action the assistant wants to perform. Nothing runs until the user approves it."""
+    __tablename__ = "assistant_actions"
+    id: Mapped[str] = pk()
+    thread_id: Mapped[str] = fk("assistant_threads.id")
+    message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    organization_id: Mapped[str] = fk("organizations.id")
+    user_id: Mapped[str] = fk("users.id")
+    tool: Mapped[str] = mapped_column(String(64))
+    args: Mapped[dict] = mapped_column(JSON, default=dict)
+    why: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="proposed")  # proposed | executed | failed | rejected
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = created()
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
