@@ -593,5 +593,9 @@ class HealingCase(Base):
     approval_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     model: Mapped[str] = mapped_column(String(200), default="")
     notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Timestamped history that survives re-investigations: [{"at", "run", "stage", "text", "ok"}]
+    log: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    runs: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = created()
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

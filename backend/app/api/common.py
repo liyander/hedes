@@ -22,3 +22,8 @@ def username(db: Session, user_id: str | None, default: str = "—") -> str:
         return default
     u = db.get(User, user_id)
     return u.username if u else default
+
+
+def like_pattern(q: str) -> str:
+    """A case-insensitive 'contains' pattern with LIKE wildcards in the user's text escaped (use with escape="\\")."""
+    return "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"

@@ -6,7 +6,7 @@ let timer;
 
 export async function render(ctx) {
   if (ctx.params[0] === 'execution') return renderExecution(ctx);
-  if (ctx.params[0] === 'healing') return renderCase(ctx);
+  if (ctx.params[0] === 'healing') { location.replace(`#/healing/${ctx.params[1] || ''}`); return; }  // old links in emails
   const paint = async () => {
     const [m, fails, repairs, execs, heal] = await Promise.all([api('/monitoring/metrics'), api('/monitoring/failures'), api('/repairs'),
       api('/executions?limit=40'), api('/healing/cases')]);
@@ -63,43 +63,11 @@ const CASE_LABEL = { investigating: 'investigating', resolved: 'fixed', awaiting
 function healingCard(h) {
   const rows = h.cases.slice(0, 10);
   return `<div class="card" style="margin-top:18px"><div class="card-head"><h2>Self-healing</h2><span class="spacer"></span>
-      ${h.enabled ? badge('ok', 'on') : `${badge('disabled', 'off')} <a class="link small" href="#/settings">Turn on in Settings</a>`}</div>
+      ${h.enabled ? badge('ok', 'on') : `${badge('disabled', 'off')} <a class="link small" href="#/settings">Turn on in Settings</a>`} <a class="btn sm" href="#/healing">All sessions &amp; logs</a></div>
     ${rows.length ? `<div class="table-scroll"><table><thead><tr><th>Target</th><th>Status</th><th>Root cause</th><th>Attempts</th><th>Seen</th><th>Updated</th></tr></thead><tbody>
-      ${rows.map((c) => `<tr class="clickable" data-go="#/monitoring/healing/${c.id}"><td class="mono small">${esc(c.target)}<div class="muted">${esc(c.error_class)}</div></td>
+      ${rows.map((c) => `<tr class="clickable" data-go="#/healing/${c.id}"><td class="mono small">${esc(c.target)}<div class="muted">${esc(c.error_class)}</div></td>
         <td>${badge(CASE_STATUS[c.status] || '', CASE_LABEL[c.status] || c.status)}</td><td class="wrap small">${esc(c.root_cause.slice(0, 180))}</td>
         <td>${c.attempts.length}</td><td>${c.occurrences}×</td><td class="nowrap">${agoCell(c.updated_at)}</td></tr>`).join('')}
     </tbody></table></div>` : `<div class="card-body"><p class="muted small" style="margin:0">${h.enabled ? 'No failures needed attention.' : 'When self-healing is on, every failure is traced here: root cause, what was tried, and what still needs an administrator. Use “Investigate and fix” on a failed execution to try it once.'}</p></div>`}</div>`;
 }
 
-let caseTimer;
-
-async function renderCase({ el, params }) {
-  const paint = async () => {
-    const c = await api(`/healing/cases/${params[1]}`);
-    el.innerHTML = `<div class="page">
-      <div class="crumb"><a href="#/monitoring">Monitoring</a> / Self-healing</div>
-      ${pageHead('wrench', c.target, `${badge(CASE_STATUS[c.status] || '', CASE_LABEL[c.status] || c.status)} ${esc(c.error_class)} · seen ${c.occurrences}× · ${esc(fmtTime(c.updated_at))}`,
-        `${c.approval_request_id ? `<a class="btn primary" href="#/approvals/${c.approval_request_id}">Review the fix</a>` : ''}
-         <button class="btn" id="retry" ${c.status === 'investigating' ? 'disabled' : ''}>${icon('refresh', 15)} Investigate again</button>`)}
-      <div class="stack">
-        ${c.status === 'investigating' ? '<div class="callout info"><span class="spinner"></span> Investigating…</div>' : ''}
-        <div class="card card-pad"><h2 style="margin-bottom:6px">Root cause</h2><p style="margin:0">${esc(c.root_cause || '—')}</p>
-          ${c.analysis && c.analysis !== c.root_cause ? `<p class="small" style="margin:10px 0 0">${icon('spark', 13)} ${esc(c.analysis)} <span class="muted mono">${esc(c.model)}</span></p>` : ''}
-          ${c.endpoint.url ? `<p class="small muted" style="margin:10px 0 0">Endpoint: <span class="mono">${esc(c.endpoint.method)} ${esc(c.endpoint.url)}</span>${c.endpoint.http_status ? ` · HTTP ${c.endpoint.http_status}` : ''}</p>` : ''}</div>
-        <div class="card"><div class="card-head"><h2>What was tried</h2></div><div class="card-body">
-          ${c.attempts.length ? c.attempts.map((a) => `<div class="finding">${badge(a.ok ? 'ok' : 'failed', a.ok ? 'worked' : 'did not fix it')}<div class="small"><b>${esc(a.action)}</b><div class="muted">${esc(a.result)}</div></div></div>`).join('')
-            : '<p class="muted small" style="margin:0">Nothing could be tried automatically for this kind of problem.</p>'}</div></div>
-        ${c.still_failing ? `<div class="callout bad small"><b>Still failing:</b> ${esc(c.still_failing)}</div>` : ''}
-        ${c.required.length ? `<div class="callout warn"><b>Required from an administrator</b><ul style="margin:6px 0 0;padding-left:18px">${c.required.map((r) => `<li class="small">${esc(r)}</li>`).join('')}</ul></div>` : ''}
-        <div class="card"><div class="card-head"><h2>Evidence</h2><span class="spacer"></span><span class="muted small">${c.notified_at ? `administrators notified ${agoCell(c.notified_at)}` : ''}</span></div>
-          <div class="card-body"><pre>${esc(JSON.stringify(c.evidence, null, 2))}</pre>${c.execution_id ? `<a class="link small" href="#/monitoring/execution/${c.execution_id}">Open the failed execution</a>` : ''}</div></div>
-      </div></div>`;
-    el.querySelector('#retry')?.addEventListener('click', async () => {
-      try { await api(`/healing/cases/${c.id}/retry`, { method: 'POST' }); paint(); } catch (err) { toast(err.message, 'bad'); }
-    });
-    clearTimeout(caseTimer);
-    if (c.status === 'investigating') caseTimer = setTimeout(() => paint().catch(() => {}), 1500);
-  };
-  await paint();
-  return () => clearTimeout(caseTimer);
-}

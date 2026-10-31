@@ -1,32 +1,65 @@
 """Self-healing cases: list and inspect investigations, re-run one, or investigate a failed execution on demand."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
 from ..core.security import Principal, current_principal, require_human, require_role
-from ..models import Execution, HealingCase, Integration
+from ..models import ApprovalRequest, Execution, HealingCase, Integration, IntegrationVersion
 from ..services import healing
-from .common import iso
+from .common import iso, like_pattern
 
 router = APIRouter(prefix="/api/v1", tags=["self-healing"])
 
 
-def case_view(c: HealingCase) -> dict:
-    return {"id": c.id, "target": c.target, "error_class": c.error_class, "status": c.status, "root_cause": c.root_cause,
-            "analysis": c.analysis, "attempts": c.attempts or [], "required": c.required or [], "endpoint": c.endpoint or {},
-            "still_failing": c.still_failing, "occurrences": c.occurrences, "integration_id": c.integration_id, "workflow_id": c.workflow_id,
-            "execution_id": c.execution_id, "approval_request_id": c.approval_request_id, "evidence": c.evidence or {}, "model": c.model,
-            "notified_at": iso(c.notified_at), "created_at": iso(c.created_at), "updated_at": iso(c.updated_at),
-            "report": healing.report_text(c)}
+def _duration_s(c: HealingCase) -> int | None:
+    end = c.resolved_at or (c.updated_at if c.status != "investigating" else None)
+    return int((end - c.created_at).total_seconds()) if end and c.created_at else None
+
+
+def case_view(c: HealingCase, db: Session | None = None, full: bool = False) -> dict:
+    out = {"id": c.id, "target": c.target, "error_class": c.error_class, "status": c.status, "root_cause": c.root_cause,
+           "analysis": c.analysis, "attempts": c.attempts or [], "required": c.required or [], "endpoint": c.endpoint or {},
+           "still_failing": c.still_failing, "occurrences": c.occurrences, "integration_id": c.integration_id, "workflow_id": c.workflow_id,
+           "execution_id": c.execution_id, "approval_request_id": c.approval_request_id, "evidence": c.evidence or {}, "model": c.model,
+           "runs": c.runs or (1 if c.attempts or c.root_cause else 0), "resolved_at": iso(c.resolved_at), "duration_s": _duration_s(c),
+           "fixes_tried": len(c.attempts or []), "fixes_worked": sum(1 for x in c.attempts or [] if x.get("ok")),
+           "notified_at": iso(c.notified_at), "created_at": iso(c.created_at), "updated_at": iso(c.updated_at),
+           "report": healing.report_text(c)}
+    if full:
+        out["log"] = c.log or []
+        if db is not None:
+            integ = db.get(Integration, c.integration_id) if c.integration_id else None
+            out["integration"] = {"id": integ.id, "name": integ.name, "slug": integ.slug} if integ else None
+            fix = db.get(IntegrationVersion, c.fix_version_id) if c.fix_version_id else None
+            req = db.get(ApprovalRequest, c.approval_request_id) if c.approval_request_id else None
+            out["fix"] = {"version_id": fix.id, "version": fix.version, "status": fix.status, "notes": fix.notes,
+                          "decision": req.decision if req else None, "comment": req.comment if req else ""} if fix else None
+            q = select(Execution).where(Execution.organization_id == c.organization_id, Execution.error_class == c.error_class)
+            q = q.where(Execution.integration_id == c.integration_id) if c.integration_id else q.where(Execution.id == c.execution_id)
+            out["executions"] = [{"id": e.id, "tool": e.tool_name, "status": e.status, "http_status": e.http_status, "error": e.error[:200],
+                                  "created_at": iso(e.created_at)} for e in db.scalars(q.order_by(Execution.created_at.desc()).limit(10)).all()]
+    return out
 
 
 @router.get("/healing/cases")
-def list_cases(p: Principal = Depends(current_principal), db: Session = Depends(get_db)):
-    rows = db.scalars(select(HealingCase).where(HealingCase.organization_id == p.org_id).order_by(HealingCase.updated_at.desc()).limit(100)).all()
-    return {"enabled": healing.enabled(db, p.org_id), "cases": [case_view(c) for c in rows]}
+def list_cases(p: Principal = Depends(current_principal), db: Session = Depends(get_db), status: str | None = None,
+               q: str | None = Query(None, max_length=100), limit: int = Query(100, ge=1, le=500)):
+    cond = [HealingCase.organization_id == p.org_id]
+    if status:
+        cond.append(HealingCase.status == status)
+    if q:
+        like = like_pattern(q)
+        cond.append(or_(HealingCase.target.ilike(like, escape="\\"), HealingCase.error_class.ilike(like, escape="\\"), HealingCase.root_cause.ilike(like, escape="\\")))
+    rows = db.scalars(select(HealingCase).where(*cond).order_by(HealingCase.updated_at.desc()).limit(limit)).all()
+    counts = dict(db.execute(select(HealingCase.status, func.count()).where(HealingCase.organization_id == p.org_id)
+                             .group_by(HealingCase.status)).all())
+    total = sum(counts.values())
+    return {"enabled": healing.enabled(db, p.org_id), "cases": [case_view(c) for c in rows],
+            "summary": {"total": total, **{k: counts.get(k, 0) for k in ("investigating", "resolved", "awaiting_approval", "needs_admin")},
+                        "fixed_rate": round(100 * counts.get("resolved", 0) / total) if total else None}}
 
 
 def _case(db: Session, p: Principal, cid: str) -> HealingCase:
@@ -38,7 +71,7 @@ def _case(db: Session, p: Principal, cid: str) -> HealingCase:
 
 @router.get("/healing/cases/{cid}")
 def get_case(cid: str, p: Principal = Depends(current_principal), db: Session = Depends(get_db)):
-    return case_view(_case(db, p, cid))
+    return case_view(_case(db, p, cid), db, full=True)
 
 
 @router.post("/healing/cases/{cid}/retry")

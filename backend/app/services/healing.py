@@ -68,9 +68,12 @@ def on_failure(db: Session, ex: Execution, integ: Integration, force: bool = Fal
     if case and not force:
         case.occurrences += 1
         case.evidence = {**(case.evidence or {}), "last_execution_id": ex.id, "last_error": ex.error[:500]}
+        log_event(case, "recurred", f"The same failure happened again (occurrence {case.occurrences}): {ex.error[:300]}")
         return case
     case = HealingCase(organization_id=ex.organization_id, integration_id=integ.id, execution_id=ex.id, target=ex.tool_name or integ.name,
-                       error_class=ex.error_class or "unknown", endpoint=_endpoint(ex))
+                       error_class=ex.error_class or "unknown", endpoint=_endpoint(ex), log=[], runs=0)
+    log_event(case, "opened", f"{ex.tool_name or integ.name} failed with {ex.error_class or 'an error'}"
+              + (f" (HTTP {ex.http_status})" if ex.http_status else "") + f": {ex.error[:300]}" + (" - started by hand" if force else ""), False)
     db.add(case)
     _queue(db, case)
     return case
@@ -86,9 +89,11 @@ def on_workflow_failure(db: Session, wf: Workflow, run: WorkflowRun) -> HealingC
     case = _open_case(db, wf.organization_id, "workflow_step", workflow_id=wf.id)
     if case:
         case.occurrences += 1
+        log_event(case, "recurred", f"The workflow failed again (occurrence {case.occurrences}): {run.error[:300]}")
         return case
     case = HealingCase(organization_id=wf.organization_id, workflow_id=wf.id, target=f"workflow: {wf.name}", error_class="workflow_step",
-                       evidence={"run_id": run.id})
+                       evidence={"run_id": run.id}, log=[], runs=0)
+    log_event(case, "opened", f"Workflow '{wf.name}' failed: {run.error[:300]}", False)
     db.add(case)
     _queue(db, case)
     return case
@@ -116,6 +121,7 @@ def investigate_by_id(case_id: str) -> None:
             if case:
                 case.status = "needs_admin"
                 case.root_cause = case.root_cause or "The automatic investigation itself failed (see the server log)."
+                log_event(case, "error", "The automatic investigation itself failed (see the server log)", False)
                 _report(db, case)
 
 
@@ -126,8 +132,20 @@ def _endpoint(ex: Execution) -> dict:
     return {"method": rp.get("method", ""), "url": rp.get("url", ""), "operation": ex.tool_name, "http_status": ex.http_status}
 
 
+MAX_LOG = 300
+STATUS_TEXT = {"resolved": "Fixed", "awaiting_approval": "A fix is waiting for an administrator's approval",
+               "needs_admin": "Could not fix it automatically; an administrator is needed", "investigating": "Investigating"}
+
+
+def log_event(case: HealingCase, stage: str, text: str, ok: bool | None = None) -> None:
+    """Append to the case's timeline. Kept across re-investigations so the full history of a case stays visible."""
+    entry = {"at": utcnow().isoformat() + "Z", "run": case.runs or 0, "stage": stage, "text": str(text)[:1000], "ok": ok}
+    case.log = [*(case.log or []), entry][-MAX_LOG:]
+
+
 def _try(case: HealingCase, action: str, result: str, ok: bool) -> None:
-    case.attempts = [*(case.attempts or []), {"action": action, "result": result[:600], "ok": ok}]
+    case.attempts = [*(case.attempts or []), {"action": action, "result": result[:600], "ok": ok, "at": utcnow().isoformat() + "Z"}]
+    log_event(case, "attempt", f"{action} - {result[:600]}", ok)
 
 
 def _probe(db: Session, integ: Integration, version: IntegrationVersion) -> tuple[bool | None, str]:
@@ -230,6 +248,8 @@ def _credential_requirements(integ: Integration, live: IntegrationVersion, error
 
 def investigate(db: Session, case: HealingCase) -> None:
     case.status, case.attempts, case.required = "investigating", [], []
+    case.runs = (case.runs or 0) + 1
+    log_event(case, "started", f"Investigation #{case.runs} started")
     db.commit()
     if case.workflow_id and not case.integration_id:
         _investigate_workflow(db, case)
@@ -261,6 +281,8 @@ def investigate(db: Session, case: HealingCase) -> None:
     cls = case.error_class
     meaning, fix = engine.ERROR_GUIDE.get(cls, ("The operation failed.", ""))
     case.root_cause = meaning
+    log_event(case, "evidence", f"Collected evidence: {case.evidence['failures_24h']} failure(s) in 24 h, last success {case.evidence['last_success']}, "
+              f"version {live.version}" + (f", in workflow {case.evidence['workflow']}" if case.evidence.get("workflow") else ""))
 
     if cls in TRANSIENT:
         _pause(PAUSE_SECONDS)
@@ -362,7 +384,14 @@ def _investigate_workflow(db: Session, case: HealingCase) -> None:
 
 
 def _finish(db: Session, case: HealingCase) -> None:
+    log_event(case, "diagnosis", f"Root cause: {case.root_cause}")
     case.analysis, case.model = _explain(db, case)
+    if case.analysis and case.analysis != case.root_cause:
+        log_event(case, "analysis", f"AI analysis ({case.model or 'model'}): {case.analysis}")
+    if case.status == "resolved":
+        case.resolved_at = utcnow()
+    log_event(case, "outcome", STATUS_TEXT.get(case.status, case.status) + (f". Required: {'; '.join(case.required)}" if case.required and case.status != "resolved" else ""),
+              case.status == "resolved" if case.status != "awaiting_approval" else None)
     audit.record(db, case.organization_id, "self-healing", "healing.case", case.target, status=case.status, error_class=case.error_class,
                  attempts=len(case.attempts or []))
     if case.status in ("needs_admin", "awaiting_approval"):
@@ -407,5 +436,17 @@ def report_text(case: HealingCase) -> str:
 
 
 def _report(db: Session, case: HealingCase) -> None:
-    audit.alert(db, case.organization_id, "self_healing", report_text(case), "high", case.integration_id, f"#/monitoring/healing/{case.id}")
+    audit.alert(db, case.organization_id, "self_healing", report_text(case), "high", case.integration_id, f"#/healing/{case.id}")
     case.notified_at = utcnow()
+    log_event(case, "notified", "Administrators were alerted (and emailed when alert delivery is configured)")
+
+
+def on_fix_decision(db: Session, approval_request_id: str, decision: str, reviewer_label: str) -> None:
+    """Close the loop when an administrator decides on a fix that self-healing prepared."""
+    for case in db.scalars(select(HealingCase).where(HealingCase.approval_request_id == approval_request_id)).all():
+        if decision == "approved":
+            case.status, case.resolved_at = "resolved", utcnow()
+            log_event(case, "fix_decision", f"{reviewer_label} approved the prepared fix; it is now live", True)
+        else:
+            case.status = "needs_admin"
+            log_event(case, "fix_decision", f"{reviewer_label} {decision.replace('_', ' ')} the prepared fix; the failure still needs attention", False)

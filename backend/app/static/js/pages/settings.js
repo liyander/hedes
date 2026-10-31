@@ -130,47 +130,94 @@ function notificationsCard(n) {
 
 
 // Email templates: one per family of alerts. Subject and intro can be customised; empty restores the built-in text.
+const kindChips = (x) => (x.kinds.length ? x.kinds.map((k) => `<span class="kchip">${esc(k.replace(/_/g, ' '))}</span>`).join('')
+  : `<span class="kchip muted">${x.key === 'test' ? 'used by Send test' : 'any other alert'}</span>`);
+
 function templatesCard(t) {
-  const ph = t.placeholders.map((x) => `<code>{${esc(x)}}</code>`).join(' ');
-  return `<div class="card"><div class="card-head"><h2>Email templates</h2><span class="muted small">one per kind of alert · HTML with a plain-text fallback</span></div>
+  return `<div class="card"><div class="card-head"><h2>Email templates</h2><span class="muted small">one per kind of alert · HTML with a plain-text fallback</span><span class="spacer"></span>
+      <span class="small muted" id="tpl-dirty"></span><button class="btn sm primary" id="save-tpl" disabled>Save templates</button></div>
     <div class="card-body" id="tpl">
-    <p class="small muted" style="margin-top:0">Each alert is emailed with the template for its kind. Change the subject or intro if you like; leave a field empty to use the built-in text. Placeholders: ${ph}.</p>
-    ${t.templates.map((x) => `<details class="tpl" data-key="${esc(x.key)}" style="border-top:1px solid var(--line);padding:10px 0">
-      <summary style="cursor:pointer" class="row between"><span><b>${esc(x.name)}</b>${Object.keys(x.override).length ? ' ' + badge('info', 'customised') : ''}</span>
-        <span class="muted small">${x.kinds.length ? `for: ${x.kinds.map((k) => esc(k.replace(/_/g, ' '))).join(', ')}` : x.key === 'test' ? 'used by Send test' : 'any other alert'}</span></summary>
-      <div style="margin-top:10px">
-        <div class="field"><label>Subject</label><input type="text" name="subject" maxlength="200" value="${esc(x.override.subject || '')}" placeholder="${esc(x.default.subject)}"></div>
-        <div class="field"><label>Intro</label><textarea name="intro" rows="2" maxlength="1000" placeholder="${esc(x.default.intro)}">${esc(x.override.intro || '')}</textarea></div>
-        <div class="row"><button type="button" class="btn sm" data-tpl-preview="${esc(x.key)}">${icon('eye', 13)} Preview</button>
-          <button type="button" class="btn sm" data-tpl-test="${esc(x.key)}">${icon('send', 13)} Send test email</button></div>
-      </div></details>`).join('')}
-    <div class="row end" style="margin-top:12px"><button class="btn primary" id="save-tpl">Save templates</button></div></div></div>`;
+    <p class="small muted" style="margin:0 0 12px">Each alert is emailed with the template for its kind. Open one to change its subject or intro; the preview updates as you type. Leave a field empty to use the built-in text.</p>
+    <div class="etpl-list">${t.templates.map((x) => {
+      const custom = Object.values(x.override).some(Boolean);
+      return `<details class="etpl" data-key="${esc(x.key)}" data-orig="${esc(JSON.stringify({ subject: x.override.subject || '', intro: x.override.intro || '' }))}">
+      <summary><span class="etpl-chev">${icon('chev', 14)}</span><div class="etpl-head"><div class="row" style="gap:8px"><b>${esc(x.name)}</b>
+          <span class="etpl-state">${custom ? badge('info', 'customised') : '<span class="badge low">default</span>'}</span></div>
+        <div class="etpl-subj small muted">${esc(x.preview.subject)}</div></div><div class="etpl-kinds">${kindChips(x)}</div></summary>
+      <div class="etpl-body">
+        <div class="etpl-edit">
+          <div class="field"><label>Subject</label><input type="text" name="subject" maxlength="200" value="${esc(x.override.subject || '')}" placeholder="${esc(x.default.subject)}"></div>
+          <div class="field"><label>Intro</label><textarea name="intro" rows="4" maxlength="1000" placeholder="${esc(x.default.intro)}">${esc(x.override.intro || '')}</textarea></div>
+          <div class="small muted" style="margin-bottom:6px">Insert a placeholder:</div>
+          <div class="row" style="gap:6px;margin-bottom:12px">${t.placeholders.map((p) => `<button type="button" class="chip" data-ph="{${esc(p)}}">{${esc(p)}}</button>`).join('')}</div>
+          <div class="row"><button type="button" class="btn sm" data-tpl-reset>${icon('refresh', 13)} Reset to default</button>
+            <button type="button" class="btn sm" data-tpl-test="${esc(x.key)}">${icon('send', 13)} Send test</button></div>
+        </div>
+        <div class="etpl-preview"><div class="row between small muted" style="margin-bottom:6px"><span>Preview · sample data</span><span class="etpl-ptext"></span></div>
+          <div class="etpl-mailsubj small"><span class="muted">Subject:</span> <b data-psubj>${esc(x.preview.subject)}</b></div>
+          <iframe sandbox="" title="Email preview" data-pframe srcdoc="${esc(x.preview.html)}"></iframe>
+          <details class="small" style="margin-top:6px"><summary class="muted" style="cursor:pointer">Plain-text version</summary><pre data-ptext style="white-space:pre-wrap;max-height:200px">${esc(x.preview.text)}</pre></details></div>
+      </div></details>`;
+    }).join('')}</div></div></div>`;
 }
 
 function wireTemplates(el) {
   const root = $('#tpl', el);
   const fields = (d) => ({ subject: $('[name=subject]', d).value, intro: $('[name=intro]', d).value });
+  const dirty = () => [...root.querySelectorAll('.etpl')].filter((d) => JSON.stringify(fields(d)) !== JSON.stringify(JSON.parse(d.dataset.orig)));
+  const refreshDirty = () => {
+    const n = dirty().length;
+    $('#save-tpl', el).disabled = !n;
+    $('#tpl-dirty', el).textContent = n ? `${n} unsaved change${n > 1 ? 's' : ''}` : '';
+    root.querySelectorAll('.etpl').forEach((d) => d.classList.toggle('changed', dirty().includes(d)));
+  };
+  const timers = new WeakMap();
+  const preview = (d) => {
+    clearTimeout(timers.get(d));
+    timers.set(d, setTimeout(async () => {
+      try {
+        const r = await api('/settings/notifications/templates/preview', { method: 'POST', body: { template: d.dataset.key, ...fields(d) } });
+        $('[data-psubj]', d).textContent = r.subject;
+        $('[data-pframe]', d).srcdoc = r.html;
+        $('[data-ptext]', d).textContent = r.text;
+        $('.etpl-subj', d).textContent = r.subject;
+        $('.etpl-ptext', d).textContent = '';
+      } catch (err) { $('.etpl-ptext', d).textContent = err.message; }
+    }, 350));
+  };
+  root.addEventListener('input', (e) => { const d = e.target.closest('.etpl'); if (d) { refreshDirty(); preview(d); } });
+  let lastFocus = null;
+  root.addEventListener('focusin', (e) => { if (e.target.matches('[name=subject], [name=intro]')) lastFocus = e.target; });
   $('#save-tpl', el).addEventListener('click', async () => {
     const overrides = {};
-    root.querySelectorAll('.tpl').forEach((d) => { overrides[d.dataset.key] = fields(d); });
+    root.querySelectorAll('.etpl').forEach((d) => { overrides[d.dataset.key] = fields(d); });
     try { await api('/settings/notifications/templates', { method: 'PUT', body: { overrides } }); toast('Email templates saved', 'ok'); route(); } catch (err) { toast(err.message, 'bad'); }
   });
   root.addEventListener('click', async (e) => {
-    const b = e.target.closest('[data-tpl-preview], [data-tpl-test]');
+    const ph = e.target.closest('[data-ph]');
+    if (ph) {
+      const d = ph.closest('.etpl');
+      const input = lastFocus && d.contains(lastFocus) ? lastFocus : $('[name=intro]', d);
+      const at = input.selectionStart ?? input.value.length;
+      input.value = input.value.slice(0, at) + ph.dataset.ph + input.value.slice(input.selectionEnd ?? at);
+      input.focus(); input.selectionStart = input.selectionEnd = at + ph.dataset.ph.length;
+      refreshDirty(); preview(d);
+      return;
+    }
+    const reset = e.target.closest('[data-tpl-reset]');
+    if (reset) {
+      const d = reset.closest('.etpl');
+      $('[name=subject]', d).value = ''; $('[name=intro]', d).value = '';
+      refreshDirty(); preview(d);
+      return;
+    }
+    const b = e.target.closest('[data-tpl-test]');
     if (!b) return;
-    const d = b.closest('.tpl');
+    const d = b.closest('.etpl');
     b.disabled = true;
     try {
-      if (b.dataset.tplPreview) {
-        const r = await api('/settings/notifications/templates/preview', { method: 'POST', body: { template: d.dataset.key, ...fields(d) } });
-        await modal({ title: `Preview: ${r.subject}`, wide: true,
-          body: `<div class="small muted" style="margin-bottom:8px">Subject: <b>${esc(r.subject)}</b> · sample data</div><div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">${r.html}</div>
-            <details style="margin-top:10px"><summary class="small muted" style="cursor:pointer">Plain-text version</summary><pre style="white-space:pre-wrap">${esc(r.text)}</pre></details>`,
-          actions: [{ label: 'Close', value: true }] });
-      } else {
-        const r = await api('/settings/notifications/test', { method: 'POST', body: { template: d.dataset.key } });
-        toast(Object.entries(r.results).map(([k, v]) => `${k}: ${v}`).join(' · ') + (Object.keys(fields(d)).some((f) => fields(d)[f]) ? ' (saved version of the template)' : ''), r.ok ? 'ok' : 'bad');
-      }
+      const r = await api('/settings/notifications/test', { method: 'POST', body: { template: d.dataset.key } });
+      toast(Object.entries(r.results).map(([k, v]) => `${k}: ${v}`).join(' · ') + (dirty().includes(d) ? ' (sent the saved version - save first to test your edits)' : ''), r.ok ? 'ok' : 'bad');
     } catch (err) { toast(err.message, 'bad'); }
     b.disabled = false;
   });

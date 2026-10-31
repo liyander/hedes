@@ -284,6 +284,8 @@ def approve(db: Session, org_id: str, request_id: str, reviewer, comment: str = 
     rp = db.scalars(select(RepairProposal).where(RepairProposal.approval_request_id == req.id)).first()
     if rp:
         rp.status = "approved"
+    from . import healing
+    healing.on_fix_decision(db, req.id, "approved", getattr(getattr(reviewer, "user", reviewer), "username", "An administrator"))
     audit.record(db, org_id, reviewer, "approval.approve", f"{integ.slug}@{v.version}", request_id=req.id, config_hash=req.config_hash,
                  self_approved=req.requester_id == reviewer.id)
     audit.record(db, org_id, reviewer, "integration.publish", f"{integ.slug}@{v.version}", config_hash=req.config_hash)
@@ -295,6 +297,8 @@ def decide_negative(db: Session, org_id: str, request_id: str, reviewer, decisio
         raise HTTPException(422, "Explain the decision so the requester can act on it")
     req, v, integ = _pending(db, org_id, request_id)
     req.decision, req.reviewer_id, req.comment, req.decided_at = decision, reviewer.id, comment, utcnow()
+    from . import healing
+    healing.on_fix_decision(db, req.id, decision, getattr(getattr(reviewer, "user", reviewer), "username", "An administrator"))
     v.status = decision  # rejected | changes_requested
     db.add(ApprovalEvent(request_id=req.id, actor_id=reviewer.id, action=decision, comment=comment))
     rp = db.scalars(select(RepairProposal).where(RepairProposal.approval_request_id == req.id)).first()

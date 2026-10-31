@@ -15,7 +15,7 @@ from ..models import (Connection, DeadLetter, IngestRun, IngestSource, Integrati
                       NormalizedUser)
 from ..services import audit, cron, ingest
 from ..services.engine import ERROR_GUIDE
-from .common import iso
+from .common import iso, like_pattern
 
 router = APIRouter(prefix="/api/v1", tags=["data sources"])
 
@@ -187,9 +187,9 @@ def list_events(source: str | None = None, severity: str | None = None, outcome:
     if outcome:
         cond.append(NormalizedEvent.outcome == outcome)
     if q:
-        like = f"%{q.replace('%', '').replace('_', '')}%"
-        cond.append(or_(NormalizedEvent.action.ilike(like), NormalizedEvent.actor.ilike(like), NormalizedEvent.target.ilike(like),
-                        NormalizedEvent.message.ilike(like)))
+        like = like_pattern(q)
+        cond.append(or_(NormalizedEvent.action.ilike(like, escape="\\"), NormalizedEvent.actor.ilike(like, escape="\\"), NormalizedEvent.target.ilike(like, escape="\\"),
+                        NormalizedEvent.message.ilike(like, escape="\\")))
     total = db.scalar(select(func.count()).select_from(NormalizedEvent).where(*cond)) or 0
     rows = db.scalars(select(NormalizedEvent).where(*cond).order_by(NormalizedEvent.timestamp.desc()).limit(limit).offset(offset)).all()
     by_source = db.execute(select(NormalizedEvent.source, func.count()).where(NormalizedEvent.organization_id == p.org_id)
@@ -271,8 +271,8 @@ def list_entities(kind: str, source: str | None = None, q: str | None = Query(No
     if status and kind == "user":
         cond.append(model.status == status)
     if q:
-        like = f"%{q.replace('%', '').replace('_', '')}%"
-        cond.append(or_(*[getattr(model, f).ilike(like) for f in fields]))
+        like = like_pattern(q)
+        cond.append(or_(*[getattr(model, f).ilike(like, escape="\\") for f in fields]))
     total = db.scalar(select(func.count()).select_from(model).where(*cond)) or 0
     order = model.last_login if kind == "user" else model.last_seen
     rows = db.scalars(select(model).where(*cond).order_by(order.desc().nullslast(), model.fetched_at.desc()).limit(limit).offset(offset)).all()

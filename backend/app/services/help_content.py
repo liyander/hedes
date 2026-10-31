@@ -96,6 +96,13 @@ PAGES = {
         "options": [{"name": "Health", "text": "healthy, degraded (many rejected records), stale (no success for 3 intervals), failing (with the classified error and a fix), paused, not run yet."}, {"name": "Schedule", "text": "Minutes interval or a 5-field cron expression (UTC). Failing sources back off automatically."}, {"name": "Add data source", "text": "Open Integrations to create one from a template."}],
         "tips": ["Failures send Slack/email alerts when notifications are configured in Settings."],
     },
+    "healing": {
+        "title": "Self-healing",
+        "summary": "Every automatic investigation of a failure: what broke, the root cause, each fix that was tried, the outcome and a timestamped log of every step.",
+        "steps": ["Use the tabs to see sessions that need an admin, have a fix awaiting approval, were fixed, or are still running.", "Open a session to read its log (failure detected, evidence, each fix attempted, root cause, AI analysis, outcome, notifications, the admin's decision on the fix).", "If a fix was prepared, press Review the fix to approve or reject it in Approvals; the session is updated with your decision.", "After fixing something by hand (for example rotating a credential), press Investigate again; the new run is added to the same log."],
+        "options": [{"name": "Outcome", "text": "Fixed, Fix awaiting approval, Needs an admin, or Investigating."}, {"name": "Runs", "text": "How many times the failure was investigated. Recurrences of the same failure within 6 hours join the open session."}, {"name": "Turn on", "text": "Automatic self-healing is enabled in Settings; any failed execution can also be investigated by hand from Monitoring."}],
+        "tips": ["Self-healing never changes production directly: fixes are new versions that an administrator approves.", "Secrets are never changed by the AI; credential problems are reported with the steps to fix them."],
+    },
     "monitoring": {
         "title": "Monitoring",
         "summary": "Execution health: success rate, latency, error classes, drift and repair proposals.",
