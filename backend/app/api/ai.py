@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -9,7 +11,7 @@ from ..core.db import get_db, new_id, utcnow
 from ..core.security import Principal, current_principal, require_human, require_role
 from ..models import AIMessage, AIModel, AIProvider, AISession, UsageRecord
 from ..services import audit, openapi, orchestrator, vault
-from ..services.ai_gateway import TASKS, Gateway
+from ..services.ai_gateway import TASKS, Gateway, bedrock_region
 from .common import iso
 
 router = APIRouter(prefix="/api/v1/ai", tags=["AI orchestration"])
@@ -125,7 +127,7 @@ def revise(sid: str, body: MessageIn, p: Principal = Depends(require_role("user"
 def provider_view(db: Session, pr: AIProvider) -> dict:
     models = db.scalars(select(AIModel).where(AIModel.provider_id == pr.id).order_by(AIModel.priority)).all()
     return {"id": pr.id, "name": pr.name, "provider_type": pr.provider_type, "base_url": pr.base_url, "status": pr.status,
-            "has_key": bool(pr.secret_ref), "last_error": pr.last_error,
+            "has_key": bool(pr.secret_ref), "last_error": pr.last_error, "region": bedrock_region(pr.base_url, {}) if pr.provider_type == "bedrock" else "",
             "models": [{"id": m.id, "model_id": m.model_id, "label": m.label, "purposes": m.purposes, "capabilities": m.capabilities,
                         "allow_confidential": m.allow_confidential, "cost_input_per_mtok": m.cost_input_per_mtok,
                         "cost_output_per_mtok": m.cost_output_per_mtok, "priority": m.priority, "enabled": m.enabled} for m in models]}
@@ -136,30 +138,105 @@ def list_providers(p: Principal = Depends(current_principal), db: Session = Depe
     return [provider_view(db, pr) for pr in db.scalars(select(AIProvider).order_by(AIProvider.created_at)).all()]
 
 
+PROVIDER_TYPES = "^(openai_compatible|anthropic|gemini|bedrock)$"
+
+
 class ProviderIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    provider_type: str = Field(pattern="^(openai_compatible|anthropic|gemini)$")
+    provider_type: str = Field(pattern=PROVIDER_TYPES)
     base_url: str = Field(default="", max_length=500)
-    api_key: str = Field(default="", max_length=500)
-    model_id: str = Field(min_length=1, max_length=200)
+    api_key: str = Field(default="", max_length=2000)  # Bedrock: a Bedrock API key (bearer token)
+    region: str = Field(default="", max_length=32)  # Bedrock only
+    aws_access_key_id: str = Field(default="", max_length=128)
+    aws_secret_access_key: str = Field(default="", max_length=2000)
+    aws_session_token: str = Field(default="", max_length=8000)
+    model_id: str = Field(min_length=1, max_length=300)
     purposes: list[str] = ["general"]
 
 
 DEFAULT_BASE = {"openai_compatible": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com",
-                "gemini": "https://generativelanguage.googleapis.com/v1beta"}
+                "gemini": "https://generativelanguage.googleapis.com/v1beta", "bedrock": "https://bedrock-runtime.us-east-1.amazonaws.com"}
+
+# Ready-made endpoints shown in the UI. Model ids are examples: providers rename and retire models, check their docs.
+PRESETS = [
+    {"id": "bedrock", "name": "Amazon Bedrock", "provider_type": "bedrock", "base_url": "", "key_label": "AWS access keys or a Bedrock API key",
+     "models": ["us.anthropic.claude-3-7-sonnet-20250219-v1:0", "anthropic.claude-3-5-sonnet-20241022-v2:0", "amazon.nova-pro-v1:0", "meta.llama3-3-70b-instruct-v1:0"],
+     "docs": "https://docs.aws.amazon.com/bedrock/latest/userguide/getting-started.html",
+     "note": "Enable the model under Bedrock → Model access in your AWS account and region first. Newer models need an inference-profile id such as us.anthropic…"},
+    {"id": "nvidia", "name": "NVIDIA NIM", "provider_type": "openai_compatible", "base_url": "https://integrate.api.nvidia.com/v1", "key_label": "NVIDIA API key (nvapi-…)",
+     "models": ["meta/llama-3.1-70b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct", "meta/llama-3.3-70b-instruct"], "docs": "https://build.nvidia.com/", "note": ""},
+    {"id": "groq", "name": "Groq", "provider_type": "openai_compatible", "base_url": "https://api.groq.com/openai/v1", "key_label": "Groq API key",
+     "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"], "docs": "https://console.groq.com/docs/models", "note": "Groq, the fast-inference service."},
+    {"id": "xai", "name": "xAI Grok", "provider_type": "openai_compatible", "base_url": "https://api.x.ai/v1", "key_label": "xAI API key",
+     "models": ["grok-3", "grok-3-mini", "grok-2-latest"], "docs": "https://docs.x.ai/docs/models", "note": "Grok from xAI."},
+    {"id": "gemini", "name": "Google Gemini", "provider_type": "gemini", "base_url": "", "key_label": "Gemini API key",
+     "models": ["gemini-2.5-flash", "gemini-2.5-pro"], "docs": "https://ai.google.dev/gemini-api/docs/models", "note": ""},
+    {"id": "openai", "name": "OpenAI", "provider_type": "openai_compatible", "base_url": "https://api.openai.com/v1", "key_label": "OpenAI API key",
+     "models": ["gpt-4o-mini", "gpt-4o"], "docs": "https://platform.openai.com/docs/models", "note": ""},
+    {"id": "anthropic", "name": "Anthropic Claude", "provider_type": "anthropic", "base_url": "", "key_label": "Anthropic API key",
+     "models": ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"], "docs": "https://docs.anthropic.com/en/docs/about-claude/models", "note": ""},
+    {"id": "openrouter", "name": "OpenRouter", "provider_type": "openai_compatible", "base_url": "https://openrouter.ai/api/v1", "key_label": "OpenRouter API key",
+     "models": ["anthropic/claude-3.5-sonnet", "meta-llama/llama-3.3-70b-instruct"], "docs": "https://openrouter.ai/models", "note": "One key, many models."},
+    {"id": "together", "name": "Together AI", "provider_type": "openai_compatible", "base_url": "https://api.together.xyz/v1", "key_label": "Together API key",
+     "models": ["meta-llama/Llama-3.3-70B-Instruct-Turbo"], "docs": "https://docs.together.ai/docs/serverless-models", "note": ""},
+    {"id": "mistral", "name": "Mistral AI", "provider_type": "openai_compatible", "base_url": "https://api.mistral.ai/v1", "key_label": "Mistral API key",
+     "models": ["mistral-large-latest", "mistral-small-latest"], "docs": "https://docs.mistral.ai/getting-started/models/", "note": ""},
+    {"id": "deepseek", "name": "DeepSeek", "provider_type": "openai_compatible", "base_url": "https://api.deepseek.com/v1", "key_label": "DeepSeek API key",
+     "models": ["deepseek-chat"], "docs": "https://api-docs.deepseek.com/", "note": ""},
+    {"id": "fireworks", "name": "Fireworks AI", "provider_type": "openai_compatible", "base_url": "https://api.fireworks.ai/inference/v1", "key_label": "Fireworks API key",
+     "models": ["accounts/fireworks/models/llama-v3p3-70b-instruct"], "docs": "https://docs.fireworks.ai/", "note": ""},
+    {"id": "ollama", "name": "Ollama (local)", "provider_type": "openai_compatible", "base_url": "http://localhost:11434/v1", "key_label": "No key needed",
+     "models": ["llama3.1"], "docs": "https://ollama.com/library", "note": "Runs on your own machine; nothing leaves it."},
+    {"id": "lmstudio", "name": "LM Studio (local)", "provider_type": "openai_compatible", "base_url": "http://localhost:1234/v1", "key_label": "No key needed",
+     "models": [], "docs": "https://lmstudio.ai/docs", "note": "Start the local server in LM Studio first."},
+    {"id": "custom", "name": "Custom OpenAI-compatible endpoint", "provider_type": "openai_compatible", "base_url": "", "key_label": "API key (if the endpoint needs one)",
+     "models": [], "docs": "", "note": "Anything that speaks /chat/completions: vLLM, LiteLLM, Azure OpenAI gateways, internal gateways…"},
+]
+
+
+@router.get("/provider-presets")
+def provider_presets(p: Principal = Depends(current_principal)):
+    return PRESETS
+
+
+def _secret_for(body) -> dict | None:
+    """The provider secret from whichever credential fields were supplied (None = nothing supplied)."""
+    if body.provider_type == "bedrock":
+        if body.aws_access_key_id and body.aws_secret_access_key:
+            out = {"access_key_id": body.aws_access_key_id.strip(), "secret_access_key": body.aws_secret_access_key.strip()}
+            if body.aws_session_token:
+                out["session_token"] = body.aws_session_token.strip()
+            return out
+        if body.api_key:
+            return {"bearer_token": body.api_key.strip()}
+        return None
+    return {"api_key": body.api_key} if body.api_key else None
+
+
+def _bedrock_base(body) -> str:
+    region = (body.region or "us-east-1").strip().lower()
+    if not re.fullmatch(r"[a-z]{2}(-[a-z]+)+-\d", region):
+        raise HTTPException(422, "Region should look like us-east-1")
+    return f"https://bedrock-runtime.{region}.amazonaws.com"
 
 
 @router.post("/providers")
 def register_provider(body: ProviderIn, p: Principal = Depends(require_human("owner")), db: Session = Depends(get_db)):
-    base = (body.base_url or DEFAULT_BASE[body.provider_type]).rstrip("/")
+    if body.provider_type == "bedrock":
+        base = _bedrock_base(body)
+        if _secret_for(body) is None:
+            raise HTTPException(422, "Bedrock needs an AWS access key pair or a Bedrock API key (type env:NAME to read it from a server environment variable)")
+    else:
+        base = (body.base_url or DEFAULT_BASE[body.provider_type]).rstrip("/")
     if not base.startswith(("https://", "http://")):
         raise HTTPException(422, "Base URL must be http(s)")
+    secret = _secret_for(body)
     pr = AIProvider(name=body.name, provider_type=body.provider_type, base_url=base,
-                    secret_ref=vault.store_secret(db, None, {"api_key": body.api_key}) if body.api_key else None)
+                    secret_ref=vault.store_secret(db, None, secret) if secret else None)
     db.add(pr)
     db.flush()
     db.add(AIModel(provider_id=pr.id, model_id=body.model_id, label=body.model_id, purposes=[x for x in body.purposes if x in TASKS or x == "general"] or ["general"],
-                   capabilities={"json_mode": True, "context_tokens": 128000}, priority=50))
+                   capabilities={"json_mode": body.provider_type != "bedrock", "context_tokens": 128000}, priority=50))
     audit.record(db, None, p, "ai.provider.create", body.name, type=body.provider_type)
     db.commit()
     return provider_view(db, pr)
@@ -167,8 +244,13 @@ def register_provider(body: ProviderIn, p: Principal = Depends(require_human("ow
 
 class ProviderPatch(BaseModel):
     status: str | None = Field(default=None, pattern="^(active|disabled)$")
+    name: str | None = Field(default=None, min_length=1, max_length=120)
     base_url: str | None = Field(default=None, max_length=500)
-    api_key: str | None = Field(default=None, max_length=500)
+    region: str | None = Field(default=None, max_length=32)
+    api_key: str | None = Field(default=None, max_length=2000)
+    aws_access_key_id: str | None = Field(default=None, max_length=128)
+    aws_secret_access_key: str | None = Field(default=None, max_length=2000)
+    aws_session_token: str | None = Field(default=None, max_length=8000)
 
 
 @router.patch("/providers/{pid}")
@@ -178,14 +260,47 @@ def update_provider(pid: str, body: ProviderPatch, p: Principal = Depends(requir
         raise HTTPException(404, "Provider not found")
     if body.status:
         pr.status = body.status
-    if body.base_url is not None and pr.provider_type != "local":
+    if body.name and pr.provider_type != "local":
+        pr.name = body.name
+    if pr.provider_type == "bedrock" and body.region:
+        pr.base_url = _bedrock_base(body)
+    elif body.base_url is not None and pr.provider_type not in ("local", "bedrock"):
         pr.base_url = body.base_url.rstrip("/")
-    if body.api_key:
+    secret = _secret_for(type("S", (), {"provider_type": pr.provider_type, "api_key": body.api_key or "", "aws_access_key_id": body.aws_access_key_id or "",
+                                         "aws_secret_access_key": body.aws_secret_access_key or "", "aws_session_token": body.aws_session_token or ""})())
+    if secret:
         vault.delete_secret(db, pr.secret_ref)
-        pr.secret_ref = vault.store_secret(db, None, {"api_key": body.api_key})
-    audit.record(db, None, p, "ai.provider.update", pr.name, status=pr.status, key_rotated=bool(body.api_key))
+        pr.secret_ref = vault.store_secret(db, None, secret)
+    audit.record(db, None, p, "ai.provider.update", pr.name, status=pr.status, key_rotated=bool(secret))
     db.commit()
     return provider_view(db, pr)
+
+
+class DiscoverIn(BaseModel):
+    provider_type: str = Field(pattern="^(openai_compatible|gemini)$")
+    base_url: str = Field(default="", max_length=500)
+    api_key: str = Field(default="", max_length=2000)
+
+
+@router.post("/providers/discover-models")
+def discover_models(body: DiscoverIn, p: Principal = Depends(require_human("owner"))):
+    """List the model ids an endpoint offers (GET /models) so the UI can offer a pick-list. Nothing is stored."""
+    import httpx
+    base = (body.base_url or DEFAULT_BASE[body.provider_type]).rstrip("/")
+    if not base.startswith(("https://", "http://")):
+        raise HTTPException(422, "Base URL must be http(s)")
+    try:
+        if body.provider_type == "gemini":
+            r = httpx.get(base + "/models", headers={"x-goog-api-key": body.api_key}, timeout=15)
+        else:
+            r = httpx.get(base + "/models", headers={"Authorization": f"Bearer {body.api_key}"} if body.api_key else {}, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        raise HTTPException(502, f"Could not list models: {str(e)[:200]}")
+    rows = data.get("data") or data.get("models") or []
+    ids = sorted({(m.get("id") or m.get("name", "")).replace("models/", "") for m in rows if isinstance(m, dict)})
+    return {"models": [i for i in ids if i][:300]}
 
 
 @router.delete("/providers/{pid}")

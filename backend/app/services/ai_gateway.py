@@ -146,7 +146,71 @@ def _call_gemini(base: str, key: str, model: str, system: str, messages: list, j
     return text, u.get("promptTokenCount"), u.get("candidatesTokenCount")
 
 
-ADAPTERS = {"openai_compatible": _call_openai, "anthropic": _call_anthropic, "gemini": _call_gemini}
+def bedrock_region(base: str, secret: dict) -> str:
+    m = re.search(r"bedrock(?:-runtime)?(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com", base or "")
+    return (m.group(1) if m else "") or secret.get("region") or "us-east-1"
+
+
+def _call_bedrock(base: str, key: str, model: str, system: str, messages: list, json_mode: bool, timeout: float):
+    """Amazon Bedrock Converse API (works for Claude, Nova, Llama, Mistral, ... on Bedrock).
+
+    ``key`` is the provider's secret as JSON: either {"bearer_token": ...} (a Bedrock API key) or AWS access keys
+    {"access_key_id", "secret_access_key", "session_token"?}, which sign the request with Signature V4.
+    """
+    from datetime import datetime, timezone
+    from urllib.parse import quote
+
+    from .engine import sigv4_authorization
+    secret = json.loads(key) if key else {}
+    region = bedrock_region(base, secret)
+    base = (base or f"https://bedrock-runtime.{region}.amazonaws.com").rstrip("/")
+    turns: list[dict] = []
+    for m in messages:  # Converse needs strictly alternating roles starting with the user
+        role = "assistant" if m["role"] == "assistant" else "user"
+        if turns and turns[-1]["role"] == role:
+            turns[-1]["content"][0]["text"] += "\n\n" + m["content"]
+        else:
+            turns.append({"role": role, "content": [{"text": m["content"]}]})
+    if not turns or turns[0]["role"] != "user":
+        turns.insert(0, {"role": "user", "content": [{"text": "(start)"}]})
+    body = json.dumps({"messages": turns, "system": [{"text": system}], "inferenceConfig": {"maxTokens": 4096, "temperature": 0.2}},
+                      separators=(",", ":")).encode()
+    path = "/model/" + quote(model, safe="") + "/converse"          # ':' and '/' in model ids / inference-profile ARNs are encoded
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if secret.get("bearer_token"):
+        headers["Authorization"] = f"Bearer {secret['bearer_token']}"
+    elif secret.get("access_key_id") and secret.get("secret_access_key"):
+        host = base.split("://", 1)[-1]
+        amz_date = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        headers["x-amz-date"] = amz_date
+        if secret.get("session_token"):
+            headers["x-amz-security-token"] = secret["session_token"]
+        # SigV4 for non-S3 services signs the path URI-encoded a second time.
+        headers["Authorization"] = sigv4_authorization("POST", host, quote(path, safe="/-_.~"), {}, body, secret["access_key_id"],
+                                                       secret["secret_access_key"], region, "bedrock", amz_date, secret.get("session_token"))
+    else:
+        raise ProviderError("No AWS credentials: add an access key pair or a Bedrock API key to this provider", retryable=False)
+    try:
+        r = httpx.post(base + path, headers=headers, content=body, timeout=timeout)
+    except httpx.TimeoutException:
+        raise ProviderError("timeout")
+    except httpx.TransportError as e:
+        raise ProviderError(f"network error: {e}")
+    if r.status_code >= 400:
+        detail = r.text[:300]
+        retryable = r.status_code in (408, 429, 500, 502, 503, 504, 424)
+        hint = " (check the model is enabled for your account in Bedrock > Model access, and the region)" if r.status_code in (403, 404) or "AccessDenied" in detail else ""
+        raise ProviderError(f"HTTP {r.status_code}: {detail}{hint}", retryable)
+    try:
+        data = r.json()
+        text = "".join(b.get("text", "") for b in data["output"]["message"]["content"])
+    except (ValueError, KeyError, TypeError):
+        raise ProviderError("unexpected response shape from Bedrock")
+    u = data.get("usage") or {}
+    return text, u.get("inputTokens"), u.get("outputTokens")
+
+
+ADAPTERS = {"openai_compatible": _call_openai, "anthropic": _call_anthropic, "gemini": _call_gemini, "bedrock": _call_bedrock}
 
 
 # ---------------------------------------------------------------------------- gateway
@@ -205,7 +269,8 @@ class Gateway:
         adapter = ADAPTERS.get(p.provider_type)
         if not adapter:
             raise ProviderError(f"unknown provider type {p.provider_type}", retryable=True)
-        key = (vault.read_secret(self.db, p.secret_ref, None) or {}).get("api_key", "") if p.secret_ref else ""
+        secret = (vault.read_secret(self.db, p.secret_ref, None) or {}) if p.secret_ref else {}
+        key = json.dumps(secret) if p.provider_type == "bedrock" else secret.get("api_key", "")
         messages = [{"role": x["role"], "content": redact_ai_context(x["content"])} for x in messages]
         started = time.monotonic()
         try:

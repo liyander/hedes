@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
 
+    # Amazon Bedrock (Converse API). Set BEDROCK_MODEL_ID plus AWS keys (or AWS_BEARER_TOKEN_BEDROCK) to register it at first start;
+    # everything can also be done later in AI Providers.
+    bedrock_model_id: str = ""
+    aws_region: str = "us-east-1"
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_session_token: str = ""
+    aws_bearer_token_bedrock: str = ""
+
     ai_timeout_seconds: int = 60
     run_scheduler: bool = True
 

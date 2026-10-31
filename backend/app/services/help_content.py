@@ -105,10 +105,10 @@ PAGES = {
     },
     "providers": {
         "title": "AI Providers",
-        "summary": "The AI models behind the assistant and the agents. Add a provider with its API key; the platform routes each task to a suitable model within your budget.",
-        "steps": ["Register a provider (OpenAI-compatible, Anthropic or Gemini) with its key (owner only).", "Add models and choose what each is good for.", "Press Test to check connectivity."],
-        "options": [{"name": "Allow confidential", "text": "Whether API documentation and configurations may be sent to the model."}, {"name": "Budget", "text": "Set in Settings; over budget only free models run."}],
-        "tips": ["The AI assistant requires at least one real provider."],
+        "summary": "The AI models behind the assistant and the integration builder. Connect Amazon Bedrock, NVIDIA, Groq, xAI Grok, Gemini, OpenAI, Anthropic, OpenRouter, Ollama or any OpenAI-compatible endpoint; the platform routes each task to a suitable model within your budget.",
+        "steps": ["Press Add provider (owner only) and pick a provider from the list. Base URL, key label and example model ids are filled in for you.", "Amazon Bedrock: choose the region, then AWS access keys or a Bedrock API key (or type env:NAME to read an environment variable). Use a model or inference-profile id that is enabled under Bedrock > Model access.", "OpenAI-compatible and Gemini: paste the key, press Fetch models and pick one.", "Tick the tasks it should be preferred for (general covers everything, including the AI assistant and creating integrations), then press Test."],
+        "options": [{"name": "Use it for", "text": "general serves every task. Tick assistant, config generation, etc. to prefer a model for those; lower priority numbers are tried first, others are fallbacks."}, {"name": "Allow confidential", "text": "Whether API documentation and configurations may be sent to the model."}, {"name": "Rotate key / Edit", "text": "Replace credentials, rename, or change the base URL / AWS region without re-adding the models."}, {"name": "Budget", "text": "Set in Settings; over budget only free models run."}],
+        "tips": ["The AI assistant requires at least one real provider.", "Model ids are examples: providers rename and retire models, so check their current list.", "Local servers (Ollama, LM Studio) keep everything on your machine."],
     },
     "settings": {
         "title": "Settings",

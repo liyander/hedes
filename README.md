@@ -36,8 +36,11 @@ Open http://127.0.0.1:8000. Three accounts are seeded (same password): **builder
 
 With Docker (PostgreSQL): `cp .env.example .env && docker compose up --build`.
 
-The **AI assistant** (chat, `@` tagging, approval-gated actions) needs a real model: add OpenAI-compatible
-(OpenAI, NVIDIA, Groq, Ollama, LM Studio…), Anthropic or Gemini credentials via `.env` or **AI Providers** (owner).
+The **AI assistant** (chat, `@` tagging, approval-gated actions) and the integration builder need a real model. In
+**AI Providers** (owner) pick **Amazon Bedrock** (region + AWS access keys or a Bedrock API key + model/inference-profile id),
+NVIDIA NIM, Groq, xAI Grok, Gemini, OpenAI, Anthropic, OpenRouter, Together, Mistral, DeepSeek, Ollama, LM Studio or any
+OpenAI-compatible URL from a form (credentials are stored encrypted, or `env:NAME`). Or set `BEDROCK_MODEL_ID` + AWS keys
+in `.env` to register Bedrock on first start.
 The guided *Build an integration* pipeline still falls back to a deterministic offline model so it works without a key.
 
 The product runs against **real services only**. The bundled mock APIs, sample integrations and demo buttons exist

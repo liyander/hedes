@@ -36,6 +36,17 @@ def seed_ai_providers(db: Session) -> None:
         ("Google Gemini", "gemini", "https://generativelanguage.googleapis.com/v1beta", s.gemini_api_key, s.gemini_model,
          ["conversation", "error_explanation"], 20, (0.3, 2.5)),
     ]
+    if s.bedrock_model_id and (s.aws_bearer_token_bedrock or (s.aws_access_key_id and s.aws_secret_access_key)):
+        secret = ({"bearer_token": s.aws_bearer_token_bedrock} if s.aws_bearer_token_bedrock else
+                  {"access_key_id": s.aws_access_key_id, "secret_access_key": s.aws_secret_access_key,
+                   **({"session_token": s.aws_session_token} if s.aws_session_token else {})})
+        p = AIProvider(name="Amazon Bedrock", provider_type="bedrock", base_url=f"https://bedrock-runtime.{s.aws_region}.amazonaws.com",
+                       secret_ref=vault.store_secret(db, None, secret))
+        db.add(p)
+        db.flush()
+        db.add(AIModel(provider_id=p.id, model_id=s.bedrock_model_id, label=s.bedrock_model_id, purposes=["general"], priority=5,
+                       capabilities={"json_mode": False, "context_tokens": 200000}))
+        log.info("Registered AI provider Amazon Bedrock (%s, %s)", s.bedrock_model_id, s.aws_region)
     for name, ptype, base, key, model, purposes, prio, (cin, cout) in configured:
         if not key:
             continue

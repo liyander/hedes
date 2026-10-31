@@ -73,7 +73,8 @@ set "AIKEY="
 if defined OPENAI_API_KEY set "AIKEY=1"
 if defined ANTHROPIC_API_KEY set "AIKEY=1"
 if defined GEMINI_API_KEY set "AIKEY=1"
-if exist ".env" findstr /r /c:"^OPENAI_API_KEY=." /c:"^ANTHROPIC_API_KEY=." /c:"^GEMINI_API_KEY=." ".env" >nul 2>&1 && set "AIKEY=1"
+if defined BEDROCK_MODEL_ID set "AIKEY=1"
+if exist ".env" findstr /r /c:"^OPENAI_API_KEY=." /c:"^ANTHROPIC_API_KEY=." /c:"^GEMINI_API_KEY=." /c:"^BEDROCK_MODEL_ID=." ".env" >nul 2>&1 && set "AIKEY=1"
 
 rem --- 4. Port check, open the browser once the server answers, run --------
 netstat -ano | findstr /r /c:"127.0.0.1:%PORT% .*LISTENING" /c:"0.0.0.0:%PORT% .*LISTENING" >nul
