@@ -3,11 +3,15 @@ rem H.E.D.E.S - one-click launcher for Windows.
 rem Usage:  run.bat            (port 8000)
 rem         run.bat 9000       (custom port)
 rem         run.bat test       (run the test suite instead)
-setlocal EnableExtensions
+rem         run.bat demo       (also enable the bundled MOCK APIs and sample data - for demos only)
+rem         run.bat reset      (back up the database and start empty, e.g. to drop earlier demo/mock data)
+rem By default H.E.D.E.S runs against REAL services only: no mock APIs, no sample integrations.
+setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 set "PORT=8000"
-if not "%~1"=="" if /i not "%~1"=="test" set "PORT=%~1"
+set "MODE=%~1"
+if not "%~1"=="" if /i not "%~1"=="test" if /i not "%~1"=="demo" if /i not "%~1"=="reset" set "PORT=%~1"
 
 rem --- 1. Find Python 3.10+ -------------------------------------------------
 set "PY="
@@ -46,13 +50,30 @@ if /i "%~1"=="test" (
   exit /b %RC%
 )
 
+rem --- 2b. reset: keep a timestamped backup of the database, then start with a clean one ---
+if /i "%MODE%"=="reset" (
+  for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmm"') do set "STAMP=%%i"
+  echo [H.E.D.E.S] This moves backend\data\*.db to a backup so the next start is empty. Accounts, integrations, credentials and data are not deleted.
+  choice /m "Continue"
+  if errorlevel 2 exit /b 0
+  for %%F in (backend\data\*.db backend\data\*.db-wal backend\data\*.db-shm) do move /y "%%F" "%%F.bak-!STAMP!" >nul
+  echo [H.E.D.E.S] Database backed up. Starting fresh.
+)
+
 rem --- 3. Configuration (values in .env are used unless overridden here) ---
 if not exist ".env" if exist ".env.example" copy /y ".env.example" ".env" >nul
 if not defined SEED_PASSWORD (
   findstr /r /c:"^SEED_PASSWORD=." ".env" >nul 2>&1 || set "SEED_PASSWORD=IntegraDemo2026"
 )
-rem The bundled mock APIs live on this server, so the public URL must match the port.
 if not defined PUBLIC_BASE_URL set "PUBLIC_BASE_URL=http://127.0.0.1:%PORT%"
+rem Real services only, whatever an older .env says. "run.bat demo" is the one way to switch the mock APIs on.
+set "DEMO_MODE=false"
+if /i "%MODE%"=="demo" set "DEMO_MODE=true"
+set "AIKEY="
+if defined OPENAI_API_KEY set "AIKEY=1"
+if defined ANTHROPIC_API_KEY set "AIKEY=1"
+if defined GEMINI_API_KEY set "AIKEY=1"
+if exist ".env" findstr /r /c:"^OPENAI_API_KEY=." /c:"^ANTHROPIC_API_KEY=." /c:"^GEMINI_API_KEY=." ".env" >nul 2>&1 && set "AIKEY=1"
 
 rem --- 4. Port check, open the browser once the server answers, run --------
 netstat -ano | findstr /r /c:"127.0.0.1:%PORT% .*LISTENING" /c:"0.0.0.0:%PORT% .*LISTENING" >nul
@@ -67,6 +88,12 @@ echo   H.E.D.E.S  ^>  %PUBLIC_BASE_URL%
 echo   Accounts   ^>  builder / admin / owner
 if defined SEED_PASSWORD (echo   Password   ^>  %SEED_PASSWORD%) else (echo   Password   ^>  SEED_PASSWORD in .env)
 echo   API docs   ^>  %PUBLIC_BASE_URL%/docs
+if /i "%DEMO_MODE%"=="true" (
+  echo   Mode       ^>  DEMO: bundled mock APIs and sample data are ON
+) else (
+  echo   Mode       ^>  REAL DATA: connects to real services only ^(Integrations - Add data source^)
+)
+if not defined AIKEY echo   AI         ^>  no AI key found: the assistant needs a provider - sign in as owner, open AI Providers
 echo   Stop       ^>  Ctrl+C
 echo.
 

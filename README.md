@@ -19,7 +19,9 @@ Monitoring detects failures and drift and prepares repairs, which go back throug
 
 **Windows:** double-click `run.bat` (or `run.bat 9000` for another port, `run.bat test` to run the tests). On first run it
 creates `backend\.venv`, installs dependencies, copies `.env.example` to `.env`, starts the server and opens the browser.
-Python 3.10+ is the only prerequisite.
+Python 3.10+ is the only prerequisite. The launcher always starts in **real-data mode** (no mock APIs or sample data).
+Other modes: `run.bat demo` (turns the bundled mocks on, for demos only) and `run.bat reset` (moves the database to a
+timestamped backup so you start empty - use it once if your database was created by an earlier demo-mode build).
 
 **Manually:**
 
