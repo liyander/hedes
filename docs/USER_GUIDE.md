@@ -84,7 +84,8 @@ Every user belongs to an organisation with one of three roles. In the UI the `us
 | See executions and alerts | own executions; org alerts | all | all |
 | Audit log | own actions | whole organisation | whole organisation |
 | View approval queue and review pages | own requests ("Approvals" shows them) | ✓ | ✓ |
-| **Approve / reject / request changes** | — | ✓ (not own submissions) | ✓ (not own submissions) |
+| **Approve / reject / request changes** | — | ✓ (incl. own submissions) | ✓ (incl. own submissions) |
+| Run or reject admin-only assistant actions requested by users | — | ✓ | ✓ |
 | Disable / enable an integration, roll back to an approved version | — | ✓ | ✓ |
 | Tool settings (allowed roles, MCP exposure, enabled) | — | ✓ | ✓ |
 | Invite members, change roles user↔admin | — | ✓ | ✓ |
@@ -98,7 +99,8 @@ Every user belongs to an organisation with one of three roles. In the UI the `us
 
 ### Rules enforced on the server (not just hidden in the UI)
 
-- **Separation of duties** — the person who submitted a version cannot approve, reject or request changes on it.
+- **Any administrator decides** — every admin and owner can approve, reject or request changes, including on versions
+  they submitted themselves; such self-approvals are recorded with `self_approved: true` in the audit log.
 - **Interactive sessions only for governance** — approving, publishing, rolling back, changing tool access, inviting,
   changing roles, editing policy, managing AI providers and simulating drift all require a signed-in browser session.
   API/MCP tokens are refused even if they belong to an admin.
@@ -425,7 +427,7 @@ The **review page** shows:
 - **Changes vs live** — a field-level diff when another version is live.
 - The full configuration, security findings, test results and the event history.
 
-**Decisions** (admins, not on their own submissions):
+**Decisions** (any admin or owner, including on their own submissions):
 
 | Decision | Effect |
 | --- | --- |

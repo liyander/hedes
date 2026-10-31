@@ -10,7 +10,7 @@ from ..core.db import get_db
 from ..core.security import Principal, current_principal, require_human, require_role
 from ..models import AssistantAction, AssistantMessage, AssistantThread
 from ..services import assistant, help_content
-from .common import iso
+from .common import iso, username
 
 router = APIRouter(prefix="/api/v1", tags=["assistant"])
 
@@ -22,7 +22,7 @@ def help_all(p: Principal = Depends(current_principal)):
 
 @router.get("/assistant/status")
 def status(p: Principal = Depends(current_principal), db: Session = Depends(get_db)):
-    return {"configured": assistant.configured(db, p.org_id),
+    return {"configured": assistant.configured(db, p.org_id), "role": p.role,
             "tools": [{"name": n, "needs_approval": t[0], "role": t[1], "description": t[3]} for n, t in assistant.TOOLS.items()]}
 
 
@@ -108,11 +108,43 @@ def _action(db: Session, p: Principal, aid: str) -> AssistantAction:
 def approve(aid: str, body: DecisionIn, p: Principal = Depends(require_human("user")), db: Session = Depends(get_db)):
     """Only an interactive (browser) session can approve; API tokens cannot."""
     act = assistant.decide(db, p, _action(db, p, aid), True)
+    if act.status == "awaiting_admin":  # escalated: nothing ran, so there is nothing for the model to report yet
+        return {"action": assistant.action_view(act, db), "message": None}
     follow = assistant.follow_up(db, p, db.get(AssistantThread, act.thread_id), act, body.page)
-    return {"action": assistant.action_view(act), "message": assistant.message_view(db, follow) if follow else None}
+    return {"action": assistant.action_view(act, db), "message": assistant.message_view(db, follow) if follow else None}
 
 
 @router.post("/assistant/actions/{aid}/reject")
 def reject(aid: str, body: DecisionIn, p: Principal = Depends(require_human("user")), db: Session = Depends(get_db)):
     act = assistant.decide(db, p, _action(db, p, aid), False)
-    return {"action": assistant.action_view(act), "message": None}
+    return {"action": assistant.action_view(act, db), "message": None}
+
+
+# ---- actions a user approved that need an administrator: any administrator of the organisation can decide them
+
+@router.get("/assistant/admin/actions")
+def admin_queue(p: Principal = Depends(require_role("admin")), db: Session = Depends(get_db)):
+    rows = db.scalars(select(AssistantAction).where(AssistantAction.organization_id == p.org_id, AssistantAction.status == "awaiting_admin")
+                      .order_by(AssistantAction.created_at.desc()).limit(50)).all()
+    return [{**assistant.action_view(a, db), "requester": username(db, a.user_id), "created_at": iso(a.created_at), "decided_at": iso(a.decided_at)} for a in rows]
+
+
+class AdminDecisionIn(BaseModel):
+    comment: str = Field(default="", max_length=1000)
+
+
+def _queued(db: Session, p: Principal, aid: str) -> AssistantAction:
+    a = db.get(AssistantAction, aid)
+    if not a or a.organization_id != p.org_id:
+        raise HTTPException(404, "Action not found")
+    return a
+
+
+@router.post("/assistant/admin/actions/{aid}/approve")
+def admin_approve(aid: str, body: AdminDecisionIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+    return assistant.action_view(assistant.admin_decide(db, p, _queued(db, p, aid), True, body.comment), db)
+
+
+@router.post("/assistant/admin/actions/{aid}/reject")
+def admin_reject(aid: str, body: AdminDecisionIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+    return assistant.action_view(assistant.admin_decide(db, p, _queued(db, p, aid), False, body.comment), db)

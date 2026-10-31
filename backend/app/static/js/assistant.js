@@ -41,16 +41,32 @@ export function newThread() { S.threadId = null; S.messages = []; S.tags = []; s
 export function addTag(tag) { if (!S.tags.some((t) => t.type === tag.type && t.id === tag.id) && S.tags.length < 6) S.tags.push(tag); notify(); }
 export function getPage() { return (location.hash.replace(/^#\/?/, '').split('/')[0]) || 'dashboard'; }
 
+const AUTH_NAME = { bearer: 'Bearer token', api_key_header: 'API key (header)', api_key_query: 'API key (query)', basic: 'Username + password',
+  ssws: 'Okta API token (SSWS)', oauth2_client_credentials: 'OAuth2 client credentials', aws_sigv4: 'AWS access key (SigV4)' };
+
+// Secure credential card: the button opens the vault form; the secret never passes through the chat or the model.
+export const credentialCard = (c) => `<div class="act cred ${c.connected ? 'executed' : ''}">
+    <div class="act-head">${icon('key', 14)} <b>Connect ${esc(c.provider || c.name)} credential</b> ${c.connected ? badge('ok', 'connected') : badge('pending', c.status === 'missing' ? 'not connected' : c.status)}</div>
+    <div class="small muted">${esc(AUTH_NAME[c.auth_type] || c.auth_type)} named <code>${esc(c.name)}</code>${c.header_name ? `, sent as header <code>${esc(c.header_name)}</code>` : ''}. Stored encrypted; never shown to the AI.</div>
+    ${c.how ? `<div class="small" style="margin-top:6px">${icon('info', 12)} <b>Where to get it:</b> ${esc(c.how)}</div>` : ''}
+    ${c.docs ? `<div class="small"><a class="link" href="${esc(c.docs)}" target="_blank" rel="noopener noreferrer">Provider documentation</a></div>` : ''}
+    ${c.connected ? '' : `<div class="row" style="margin-top:8px"><button class="btn sm primary" data-connect="${esc(c.name)}" data-auth="${esc(c.auth_type)}" data-header="${esc(c.header_name || '')}">${icon('shield', 13)} Connect securely</button></div>`}
+  </div>`;
+
+const STATUS_TEXT = { proposed: 'needs your approval', awaiting_admin: 'waiting for an administrator' };
 const actionCard = (a) => {
   const done = a.status !== 'proposed';
-  const res = a.result && Object.keys(a.result).length ? `<details><summary>Result</summary><pre>${esc(JSON.stringify(a.result, null, 2))}</pre></details>` : '';
+  const { credential, ...rest } = a.result || {};
+  const res = Object.keys(rest).length ? `<details><summary>Result</summary><pre>${esc(JSON.stringify(rest, null, 2))}</pre></details>` : '';
+  const isAdmin = ['admin', 'owner'].includes(S.status?.role);
   return `<div class="act ${esc(a.status)}" data-act="${a.id}">
-    <div class="act-head">${icon('shield', 14)} <b>${esc(TOOL_LABEL[a.tool] || a.tool)}</b> ${badge(a.status === 'proposed' ? 'pending' : a.status, a.status === 'proposed' ? 'needs your approval' : a.status)}</div>
+    <div class="act-head">${icon('shield', 14)} <b>${esc(TOOL_LABEL[a.tool] || a.tool)}</b> ${badge(['proposed', 'awaiting_admin'].includes(a.status) ? 'pending' : a.status, STATUS_TEXT[a.status] || a.status)}</div>
     ${a.why ? `<div class="small muted">${esc(a.why)}</div>` : ''}
     <details><summary>Show exact inputs</summary><pre>${esc(JSON.stringify({ action: a.tool, ...a.args }, null, 2))}</pre></details>
     ${a.error ? `<div class="callout bad small">${esc(a.error)}</div>` : ''}${res}
-    ${done ? '' : `<div class="row" style="margin-top:8px"><button class="btn sm primary" data-approve="${a.id}">Approve &amp; run</button><button class="btn sm" data-reject="${a.id}">Reject</button>${a.needs_role === 'admin' ? '<span class="small muted">administrator only</span>' : ''}</div>`}
-  </div>`;
+    ${a.status === 'awaiting_admin' ? '<div class="small muted">Sent to the administrators. Any of them can run or reject it from Approvals; you will see the outcome here.</div>' : ''}
+    ${done ? '' : `<div class="row" style="margin-top:8px"><button class="btn sm primary" data-approve="${a.id}">${a.needs_role === 'admin' && !isAdmin ? 'Send to administrators' : 'Approve &amp; run'}</button><button class="btn sm" data-reject="${a.id}">Reject</button>${a.needs_role === 'admin' ? '<span class="small muted">administrator only</span>' : ''}</div>`}
+  </div>${a.status === 'executed' && credential ? credentialCard(credential) : ''}`;
 };
 
 const messageHtml = (m) => {
@@ -60,7 +76,7 @@ const messageHtml = (m) => {
   const looked = (m.meta?.looked_up || []).map((l) => `<span class="lookchip">${icon('eye', 11)} ${esc(l.tool)}</span>`).join(' ');
   return `<div class="amsg assistant"><div class="aav">${icon('spark', 14)}</div><div class="abubble">
     ${looked ? `<div class="small muted" style="margin-bottom:4px">looked up ${looked}</div>` : ''}<div class="text">${md(m.content)}</div>
-    ${(m.actions || []).map(actionCard).join('')}</div></div>`;
+    ${(m.actions || []).map(actionCard).join('')}${(m.meta?.credential_requests || []).map(credentialCard).join('')}</div></div>`;
 };
 
 function welcome(compact) {
@@ -121,9 +137,16 @@ export function mountAssistant(root, { compact = false } = {}) {
       const r = await api(`/assistant/actions/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST', body: { page: getPage() } });
       for (const m of S.messages) m.actions = (m.actions || []).map((a) => (a.id === id ? r.action : a));
       if (r.message) S.messages.push(r.message);
-      if (r.action.status === 'executed') toast('Action completed', 'ok'); else if (r.action.status === 'failed') toast(r.action.error, 'bad');
+      if (r.action.status === 'executed') toast('Action completed', 'ok'); else if (r.action.status === 'awaiting_admin') toast('Sent to the administrators for approval', 'ok');
+      else if (r.action.status === 'failed') toast(r.action.error, 'bad');
     } catch (e) { toast(e.message, 'bad'); }
     S.busy = false; notify();
+  }
+
+  async function connect({ connect: name, auth, header }) {
+    const { connectModal } = await import('./pages/credentials.js');
+    if (!await connectModal({ name, auth_type: auth, header })) return;
+    if (S.threadId) await openThread(S.threadId);   // re-read so every card for this credential shows it as connected
   }
 
   // @-mentions
@@ -155,9 +178,10 @@ export function mountAssistant(root, { compact = false } = {}) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(text.value); }
   });
   root.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-approve],[data-reject],[data-suggest],[data-untag],[data-pick],#a-tag,#a-new');
+    const t = e.target.closest('[data-approve],[data-reject],[data-connect],[data-suggest],[data-untag],[data-pick],#a-tag,#a-new');
     if (!t) return;
-    if (t.dataset.approve) decide(t.dataset.approve, true);
+    if (t.dataset.connect) connect(t.dataset);
+    else if (t.dataset.approve) decide(t.dataset.approve, true);
     else if (t.dataset.reject) decide(t.dataset.reject, false);
     else if (t.dataset.suggest) send(t.dataset.suggest);
     else if (t.dataset.untag) { S.tags.splice(+t.dataset.untag, 1); notify(); }

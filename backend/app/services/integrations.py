@@ -3,7 +3,7 @@
 Invariants enforced here (not in prompts or the UI):
 * A version is editable only while it is a draft; submitting freezes it and pins its config hash.
 * Publication happens only through ``approve`` (or ``rollback`` to a hash that was approved before), by a human
-  admin who is not the requester, after re-checking the hash, the security policy, tests and credentials.
+  administrator (self-approvals are flagged in the audit log), after re-checking the hash, the security policy, tests and credentials.
 * Only the published version's tools are executable.
 """
 from __future__ import annotations
@@ -230,8 +230,6 @@ def _pending(db: Session, org_id: str, request_id: str) -> tuple[ApprovalRequest
 
 def approval_blockers(db: Session, req: ApprovalRequest, v: IntegrationVersion, integ: Integration, reviewer_id: str | None) -> list[str]:
     problems = []
-    if reviewer_id and req.requester_id == reviewer_id:
-        problems.append("You submitted this version; a different administrator must review it.")
     if config_hash(v.config) != req.config_hash or v.config_hash != req.config_hash:
         problems.append("The configuration changed after it was submitted. It must be resubmitted.")
     report = security_review.review(v.config, org_policy(db, integ.organization_id), connections_map(db, integ.organization_id))
@@ -286,7 +284,8 @@ def approve(db: Session, org_id: str, request_id: str, reviewer, comment: str = 
     rp = db.scalars(select(RepairProposal).where(RepairProposal.approval_request_id == req.id)).first()
     if rp:
         rp.status = "approved"
-    audit.record(db, org_id, reviewer, "approval.approve", f"{integ.slug}@{v.version}", request_id=req.id, config_hash=req.config_hash)
+    audit.record(db, org_id, reviewer, "approval.approve", f"{integ.slug}@{v.version}", request_id=req.id, config_hash=req.config_hash,
+                 self_approved=req.requester_id == reviewer.id)
     audit.record(db, org_id, reviewer, "integration.publish", f"{integ.slug}@{v.version}", config_hash=req.config_hash)
     return req
 
@@ -295,8 +294,6 @@ def decide_negative(db: Session, org_id: str, request_id: str, reviewer, decisio
     if not comment.strip():
         raise HTTPException(422, "Explain the decision so the requester can act on it")
     req, v, integ = _pending(db, org_id, request_id)
-    if req.requester_id == reviewer.id:
-        raise HTTPException(403, "You cannot review your own submission")
     req.decision, req.reviewer_id, req.comment, req.decided_at = decision, reviewer.id, comment, utcnow()
     v.status = decision  # rejected | changes_requested
     db.add(ApprovalEvent(request_id=req.id, actor_id=reviewer.id, action=decision, comment=comment))

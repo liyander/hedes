@@ -82,7 +82,11 @@ that fails N runs in a row (default 3) raises one.
 configuration. Type `@` to tag an integration, source, workflow or credential; it then reads that item's configuration,
 health and recent errors (never secrets). It runs read-only lookups itself; anything that changes data or calls an
 external API is shown as an **approval card** with the exact inputs and runs only when you approve, with your own
-permissions, audited. It cannot approve or publish integrations, reveal or rotate secrets, or change policy. Every
+permissions, audited. It cannot approve or publish integrations, reveal or rotate secrets, or change policy.
+When a credential is needed it shows a **Connect credential** card (prefilled name and type, plus the provider's own
+instructions when a template exists); the secret goes from that form straight to the vault and never reaches the
+model. Provider setup guides come from the vetted templates; for other providers the assistant writes one and labels it
+AI-generated. An admin-only action approved by a user is sent to *Approvals*, where any administrator can run or reject it. Every
 page also has a hideable **Page guide** (usage, options, tips), and each integration shows a step-by-step setup guide.
 
 ## Demo script (≈5 minutes, needs `DEMO_MODE=true`)
@@ -94,8 +98,8 @@ page also has a hideable **Page guide** (usage, options, tips), and each integra
    security → safe tests (mocked) → submitted for approval.
 3. **Connect** the credential (`taskflow-demo-token`). It goes to the vault; the AI never sees it.
 4. Sign in as **admin** → *Approvals*. The review shows what the integration can do, the destination, the
-   policy checks, the tests and the configuration hash. **Approve & publish**. (The builder cannot approve, and an
-   admin cannot approve their own submission.)
+   policy checks, the tests and the configuration hash. **Approve & publish**. (The builder cannot approve; any
+   admin or owner can, including on their own submission - self-approvals are flagged in the audit log.)
 5. *Test Lab* → `taskflow.create_task` → **Preview request** (credentials redacted) → **Execute live**. The task
    appears in *Settings → Demo controls*. No connector code was added.
 6. Self-healing: *Settings* → **Simulate API change** (TaskFlow renames `assignee.user_name` to
@@ -118,7 +122,7 @@ page also has a hideable **Page guide** (usage, options, tips), and each integra
 | AI gateway: adapters (OpenAI-compatible, Anthropic, Gemini, offline), task routing by purpose/JSON/context/confidentiality, budgets, fallback, schema-validated output with one self-correction, usage + cost, secret redaction, untrusted-document wrapping | `services/ai_gateway.py` |
 | Agents: requirements, discovery, architect/config, security narrative, tests, repair, workflow planning, error explanation | `services/agents.py` |
 | Persisted pipeline state machine with per-stage retry | `services/orchestrator.py` |
-| Lifecycle: immutable submitted versions, hash-bound approval, separation of duties, credential + test gates, publish, disable, rollback to previously approved hashes, version diff | `services/integrations.py` |
+| Lifecycle: immutable submitted versions, hash-bound approval by any administrator (self-approval audited), credential + test gates, publish, disable, rollback to previously approved hashes, version diff | `services/integrations.py` |
 | Vault (Fernet-encrypted secrets addressed by reference) | `services/vault.py` |
 | Runtime authorisation, per-user rate limit, concurrency cap, execution records | `services/runtime.py` |
 | Monitoring, alerts, drift detection, automatic repair proposals | `services/monitoring.py`, `services/repairs.py` |

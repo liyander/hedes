@@ -138,7 +138,13 @@ def test_rejected_actions_never_run_and_privileged_actions_respect_roles(server,
     stub.script = [{"reply": "Propose pause.", "tool_calls": [{"tool": "set_source", "args": {"source_id": src["id"], "enabled": False}}]}]
     act = builder.post(f"/api/v1/assistant/threads/{_thread(builder)}/messages", json={"content": "pause okta"}).json()["message"]["actions"][0]
     res = builder.post(f"/api/v1/assistant/actions/{act['id']}/approve", json={}).json()["action"]
-    assert res["status"] == "failed" and "administrator" in res["error"].lower() or "admin" in res["error"].lower()
+    assert res["status"] == "awaiting_admin"                                     # escalated to the administrators, nothing ran
+    assert next(s for s in admin.get("/api/v1/sources").json()["sources"] if s["id"] == src["id"])["enabled"] is True
+    assert builder.get("/api/v1/assistant/admin/actions").status_code == 403     # users cannot see or decide the queue
+    assert builder.post(f"/api/v1/assistant/admin/actions/{act['id']}/approve", json={}).status_code == 403
+    assert any(q["id"] == act["id"] for q in admin.get("/api/v1/assistant/admin/actions").json())
+    rej = admin.post(f"/api/v1/assistant/admin/actions/{act['id']}/reject", json={"comment": "keep it running"}).json()
+    assert rej["status"] == "rejected" and "keep it running" in rej["error"]
     assert next(s for s in admin.get("/api/v1/sources").json()["sources"] if s["id"] == src["id"])["enabled"] is True
 
     ran = admin.post(f"/api/v1/sources/{src['id']}/run")
@@ -170,3 +176,62 @@ def test_create_from_template_action_makes_a_draft(server, provider, stub):
     assert out["status"] == "executed" and out["result"]["valid"] is True and out["result"]["tests"] == "passed"
     integ = next(i for i in builder.get("/api/v1/integrations").json() if i["slug"] == "nvd")
     assert integ["status"] == "draft"                  # still needs submission and an admin's approval
+
+
+def test_any_admin_runs_an_escalated_action_and_the_requester_sees_it(server, provider, stub):
+    builder, admin, owner = login(server, "builder"), login(server, "admin"), login(server, "owner")
+    src = next(t for t in builder.get("/api/v1/assistant/taggables", params={"q": "okta"}).json() if t["type"] == "source")
+    stub.script = [{"reply": "Proposed.", "tool_calls": [{"tool": "set_source", "args": {"source_id": src["id"], "interval_minutes": 60}}]}]
+    tid = _thread(builder)
+    act = builder.post(f"/api/v1/assistant/threads/{tid}/messages", json={"content": "every hour please"}).json()["message"]["actions"][0]
+    assert builder.post(f"/api/v1/assistant/actions/{act['id']}/approve", json={}).json()["action"]["status"] == "awaiting_admin"
+    assert any(q["id"] == act["id"] for q in owner.get("/api/v1/assistant/admin/actions").json())   # every administrator sees it
+    done = owner.post(f"/api/v1/assistant/admin/actions/{act['id']}/approve", json={}).json()
+    assert done["status"] == "executed" and done["result"]["approved_by"] == "owner" and done["result"]["interval_minutes"] == 60
+    assert admin.post(f"/api/v1/assistant/admin/actions/{act['id']}/approve", json={}).status_code == 409   # one-shot
+    msgs = builder.get(f"/api/v1/assistant/threads/{tid}").json()["messages"]
+    assert "owner" in msgs[-1]["content"] and "executed" in msgs[-1]["content"]
+
+
+def test_provider_guide_comes_from_the_template(server, provider, stub):
+    builder = login(server, "builder")
+    stub.prompts.clear()
+    stub.script = [{"reply": "Checking.", "tool_calls": [{"tool": "get_source_template", "args": {"template_id": "okta"}}]}, {"reply": "Here are the Okta steps."}]
+    r = builder.post(f"/api/v1/assistant/threads/{_thread(builder)}/messages", json={"content": "how do I connect okta?"}).json()["message"]
+    assert r["meta"]["looked_up"] == [{"tool": "get_source_template", "args": {"template_id": "okta"}}]
+    assert "Security" in stub.prompts[-1] and "API" in stub.prompts[-1] and "Tokens" in stub.prompts[-1]   # the template's own instructions
+    assert "AI-generated guide" in stub.prompts[-1]                                  # fallback rule for providers without a template
+
+
+def test_credential_card_never_carries_a_secret_and_tracks_connection(server, provider, stub):
+    builder = login(server, "builder")
+    stub.script = [{"reply": "Connect it with the secure form below.", "tool_calls": [
+        {"tool": "request_credential", "args": {"name": "abuse-card", "auth_type": "api_key_header", "header_name": "Key", "template_id": "abuseipdb"}},
+        {"tool": "request_credential", "args": {"name": "Bad Name!", "auth_type": "bearer"}}]}]
+    tid = _thread(builder)
+    msg = builder.post(f"/api/v1/assistant/threads/{tid}/messages", json={"content": "connect abuseipdb"}).json()["message"]
+    assert msg["actions"] == []                                                     # a card, not an action to approve
+    reqs = msg["meta"]["credential_requests"]
+    assert len(reqs) == 1 and reqs[0]["name"] == "abuse-card" and reqs[0]["connected"] is False and reqs[0]["how"]
+    assert builder.post("/api/v1/connections", json={"name": "abuse-card", "auth_type": "api_key_header", "api_key": "k-123456789"}).status_code == 200
+    again = builder.get(f"/api/v1/assistant/threads/{tid}").json()["messages"][-1]["meta"]["credential_requests"][0]
+    assert again["connected"] is True and "k-123456789" not in json.dumps(again)
+
+
+def test_an_admin_can_approve_their_own_submission(server, admin):
+    import yaml
+    from pathlib import Path
+    doc = yaml.safe_load((Path(__file__).resolve().parents[2] / "examples" / "sources" / "cisa-kev.yaml").read_text())
+    doc.pop("template")
+    doc["integration"].update(id="self-approve-kev", name="Self-approve KEV")
+    made = admin.post("/api/v1/integrations", json={"config": doc})
+    assert made.status_code == 200, made.text
+    iid = made.json()["integration"]["id"]
+    assert admin.post(f"/api/v1/integrations/{iid}/tests", json={}).json()["result"] == "passed"
+    rid = admin.post(f"/api/v1/integrations/{iid}/submit", json={}).json()["approval_id"]
+    review = admin.get(f"/api/v1/admin/approvals/{rid}").json()
+    assert review["can_decide"] is True and review["blockers"] == []
+    r = admin.post(f"/api/v1/admin/approvals/{rid}/approve", json={"comment": "self"})
+    assert r.status_code == 200, r.text
+    entry = next(e for e in admin.get("/api/v1/audit").json() if e["action"] == "approval.approve" and "self-approve-kev" in e["target"])
+    assert entry["metadata"]["self_approved"] is True

@@ -65,7 +65,7 @@ PAGES = {
         "title": "Approvals",
         "summary": "Administrators review and publish the exact version a builder submitted.",
         "steps": ["Open a request.", "Read what it can do, where it connects, the security findings and the test results.", "Approve to publish, request changes, or reject."],
-        "options": [{"name": "Separation of duties", "text": "You cannot approve a version you submitted."}, {"name": "Hash binding", "text": "Approval is tied to the exact configuration hash; any change needs resubmission."}],
+        "options": [{"name": "Any administrator", "text": "Every administrator (and owner) can decide, including on versions they submitted; self-approvals are flagged in the audit log."}, {"name": "Hash binding", "text": "Approval is tied to the exact configuration hash; any change needs resubmission."}],
         "tips": ["API tokens and the AI assistant can never approve."],
     },
     "tools": {

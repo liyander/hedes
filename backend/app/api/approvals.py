@@ -59,7 +59,7 @@ def review_details(rid: str, p: Principal = Depends(current_principal), db: Sess
     return {**_row(db, a), "config": v.config, "config_hash": a.config_hash, "hash_matches": v.config_hash == a.config_hash,
             "security": report, "tests": tr.report if tr else None, "test_result": tr.result if tr else None,
             "diff": diff, "repair": {"diagnosis": repair.diagnosis, "status": repair.status} if repair else None,
-            "blockers": blockers, "can_decide": p.at_least("admin") and p.via == "session" and a.decision == "pending" and a.requester_id != p.id,
+            "blockers": blockers, "can_decide": p.at_least("admin") and p.via == "session" and a.decision == "pending",
             "events": [{"action": e.action, "actor": username(db, e.actor_id, "AI agent"), "comment": e.comment, "at": iso(e.created_at)} for e in events]}
 
 

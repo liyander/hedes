@@ -43,7 +43,7 @@ def test_full_lifecycle(server, builder, admin, owner):
     assert item["tests"]["failed"] == 0
     approval_id = item["approval_id"]
 
-    # 4. A user cannot approve; the requester cannot self-approve; approval needs the credential.
+    # 4. A user cannot approve; approval needs the credential.
     assert builder.post(f"/api/v1/admin/approvals/{approval_id}/approve", json={}).status_code == 403
     r = admin.post(f"/api/v1/admin/approvals/{approval_id}/approve", json={})
     assert r.status_code == 409 and "taskflow" in r.json()["detail"]

@@ -76,7 +76,7 @@ def guide(iid: str, p: Principal = Depends(current_principal), db: Session = Dep
               (not needs_cred) or bool(conn and conn.status == "active"), "#/credentials", "Open Credentials"),
         _step("test", "Run the safe tests", "Schema-derived tests exercise the configuration without calling the real service. They must pass for this exact configuration.",
               bool(tr and tr.result == "passed"), f"#/integrations/{integ.id}", "Run tests"),
-        _step("submit", "Submit for review", "Freezes the version and sends it to an administrator. You cannot approve your own submission.",
+        _step("submit", "Submit for review", "Freezes the version and sends it to the administrators; any of them can approve it.",
               bool(live or pending or (latest and latest.status in ("pending_approval", "published"))), f"#/integrations/{integ.id}", "Submit"),
         _step("approve", "Administrator approves and publishes", "An admin reviews exactly what it can do and where it connects, then publishes that exact version. The AI can never approve.",
               bool(live), "#/approvals", "Open Approvals", blocked="" if (pending or live) else "Submit it first"),

@@ -6,15 +6,33 @@ export async function render(ctx) {
   if (ctx.params[0]) return renderReview(ctx);
   const filter = sessionStorage.getItem('integra-approval-filter') || 'pending';
   const rows = isAdmin() ? await api(`/admin/approvals?status=${filter}`) : await api('/approvals/mine');
+  const queued = isAdmin() ? await api('/assistant/admin/actions').catch(() => []) : [];
   ctx.el.innerHTML = `<div class="page">
     ${pageHead('check', 'Approvals', isAdmin() ? 'Review exactly what each integration version can do before it goes live. Approval is bound to the configuration hash.' : 'Your submissions and their review status.',
       isAdmin() ? `<div class="tabs">${['pending', 'approved', 'rejected', 'changes_requested', 'all'].map((k) => `<button class="${k === filter ? 'on' : ''}" data-f="${k}">${k.replace('_', ' ')}</button>`).join('')}</div>` : '')}
+    ${queued.length ? `<div class="card" style="margin-bottom:18px"><div class="card-head"><h2>${icon('spark', 15)} Assistant actions waiting for an administrator</h2></div><div class="card-body">
+      ${queued.map((q) => `<div class="op-row"><div class="grow"><b class="mono">${esc(q.tool)}</b> <span class="muted small">requested by ${esc(q.requester)} · ${agoCell(q.created_at)}</span>
+        ${q.why ? `<div class="small muted">${esc(q.why)}</div>` : ''}<details><summary class="small">Exact inputs</summary><pre>${esc(JSON.stringify(q.args, null, 2))}</pre></details></div>
+        <div class="row nowrap"><button class="btn sm ok-solid" data-qa="approve" data-q="${q.id}">Approve &amp; run</button><button class="btn sm danger" data-qa="reject" data-q="${q.id}">Reject</button></div></div>`).join('')}
+      <p class="muted small" style="margin:8px 0 0">Any administrator can decide. Approved actions run with your permissions and are audited.</p></div></div>` : ''}
     <div class="card">${rows.length ? `<div class="table-scroll"><table><thead><tr><th>Integration</th><th>Kind</th><th>Risk</th><th>Requested by</th><th>Status</th><th>Submitted</th></tr></thead><tbody>
       ${rows.map((a) => `<tr class="clickable" data-go="#/approvals/${a.id}"><td><b>${esc(a.integration)}</b> <span class="mono muted">${esc(a.version)}</span></td>
         <td>${a.kind === 'repair' ? badge('info', 'AI repair') : esc(a.kind)}</td><td>${riskBadge(a.risk?.level, a.risk?.score)}</td>
         <td>${esc(a.requester)}</td><td>${badge(a.decision)}</td><td class="nowrap">${agoCell(a.created_at)}</td></tr>`).join('')}
     </tbody></table></div>` : emptyState('check', filter === 'pending' ? 'Nothing waiting for review' : 'Nothing here', 'Submissions from AI Studio and repairs appear here.')}</div></div>`;
-  ctx.el.addEventListener('click', (e) => {
+  ctx.el.addEventListener('click', async (e) => {
+    const q = e.target.closest('[data-qa]');
+    if (q) {
+      const approve = q.dataset.qa === 'approve';
+      const res = await modal({
+        title: approve ? 'Run assistant action' : 'Reject assistant action',
+        body: `<div class="field"><label>Comment (optional)</label><textarea id="qc" placeholder="Shown to the requester"></textarea></div>`,
+        actions: [{ label: 'Cancel', value: null }, { label: approve ? 'Approve & run' : 'Reject', cls: approve ? 'ok-solid' : 'danger-solid',
+          handler: async (root) => api(`/assistant/admin/actions/${q.dataset.q}/${q.dataset.qa}`, { method: 'POST', body: { comment: $('#qc', root).value } }) }],
+      });
+      if (res) { toast(res.status === 'failed' ? res.error : `Action ${res.status}`, res.status === 'failed' ? 'bad' : 'ok'); route(); }
+      return;
+    }
     const f = e.target.closest('[data-f]');
     if (f) { sessionStorage.setItem('integra-approval-filter', f.dataset.f); return route(); }
     const r = e.target.closest('[data-go]');
@@ -47,7 +65,7 @@ async function renderReview({ el, params }) {
       ${a.can_decide ? `<div class="row" style="margin-top:18px"><button class="btn ok-solid" data-d="approve" ${a.blockers.length ? 'disabled' : ''}>${icon('check', 16)} Approve &amp; publish</button>
         <button class="btn" data-d="changes">Request changes</button><button class="btn danger" data-d="reject">Reject</button>
         <span class="muted small">Approval publishes exactly hash <span class="mono">${esc(a.config_hash.slice(0, 16))}…</span></span></div>`
-        : a.decision === 'pending' && isAdmin() ? '<p class="muted small" style="margin:16px 0 0">You submitted this version, so another administrator must review it.</p>' : ''}
+        : a.decision === 'pending' && isAdmin() ? '<p class="muted small" style="margin:16px 0 0">Decisions need an interactive administrator session (not an API token).</p>' : ''}
     </div>
     <div class="split" style="margin-top:18px">
       <div class="stack">

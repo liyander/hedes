@@ -56,6 +56,21 @@ def source_templates() -> list[dict]:
             for doc in _raw_templates().values()]
 
 
+def template_guide(template_id: str) -> dict:
+    """The vetted, provider-specific setup guide of one template: where to get the credential, steps, docs."""
+    doc = _raw_templates().get(template_id)
+    if not doc:
+        raise TemplateError(f"Unknown template {template_id!r}")
+    t, auth = doc["template"], doc["integration"]["authentication"]
+    cred = t.get("credential") or {}
+    return {"id": t["id"], "title": t["title"], "category": t.get("category", ""), "summary": t.get("summary", ""),
+            "docs": t.get("docs", ""), "free_tier": t.get("free_tier", ""), "base_url": doc["integration"]["base_url"],
+            "credential": {"type": auth["type"], "name": cred.get("name") or auth.get("credential_ref"), "how": cred.get("how", ""),
+                           "header_name": auth.get("header_name", "")} if auth["type"] != "none" else None,
+            "variables": [{k: v[k] for k in ("name", "label", "placeholder", "help") if k in v} for v in t.get("variables") or []],
+            "setup": list(t.get("setup") or []), "source": "template"}
+
+
 def build_from_template(template_id: str, variables: dict) -> dict:
     """Fill the template's {{variables}} (validated against each pattern) and return a normalised configuration."""
     import copy
