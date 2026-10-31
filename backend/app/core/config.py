@@ -1,6 +1,7 @@
 """Application settings, loaded from the environment (and an optional .env file)."""
 from __future__ import annotations
 
+import os
 import secrets
 from functools import lru_cache
 from pathlib import Path
@@ -88,6 +89,9 @@ def _persistent_key(name: str, factory) -> str:
 @lru_cache
 def get_settings() -> Settings:
     s = Settings()
+    # On Render the public URL is known only after the service is created; use it unless PUBLIC_BASE_URL is set.
+    if "public_base_url" not in s.model_fields_set and os.environ.get("RENDER_EXTERNAL_URL"):
+        s.public_base_url = os.environ["RENDER_EXTERNAL_URL"]
     if not s.jwt_secret:
         s.jwt_secret = _persistent_key(".jwt-secret", lambda: secrets.token_urlsafe(48))
     if not s.secret_encryption_key:

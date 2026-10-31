@@ -1,0 +1,32 @@
+# Render Blueprint: New → Blueprint → pick this repo. Runs on the free plan; the database is external (e.g. Neon),
+# because Render's free PostgreSQL is deleted after 30 days. Values marked sync: false are asked for when you create it.
+services:
+  - type: web
+    name: hedes
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: DATABASE_URL          # postgresql+psycopg://user:pass@host/db?sslmode=require
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SECRET_ENCRYPTION_KEY # Render generates a base64 256-bit value, which is a valid Fernet key
+        generateValue: true
+      - key: SEED_PASSWORD         # read it under Environment in the dashboard to log in as owner / admin / builder
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: DEMO_MODE
+        value: "false"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
