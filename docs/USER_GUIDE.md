@@ -1,6 +1,6 @@
-# IntegraAI — Functional Guide
+# H.E.D.E.S — Functional Guide
 
-This guide explains every feature of IntegraAI, who may use it, and what happens behind the scenes.
+This guide explains every feature of H.E.D.E.S, who may use it, and what happens behind the scenes.
 For component design and trust boundaries see [ARCHITECTURE.md](ARCHITECTURE.md); for setup see the [README](../README.md).
 
 **Contents**
@@ -689,7 +689,7 @@ without any API key.
 
 ## 22. MCP gateway for AI agents
 
-IntegraAI exposes approved tools to Model Context Protocol clients at `POST /mcp`.
+H.E.D.E.S exposes approved tools to Model Context Protocol clients at `POST /mcp`.
 
 - **Authentication:** `Authorization: Bearer <personal API token>`. The agent acts with the token owner's role.
 - **Methods:**

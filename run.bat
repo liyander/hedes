@@ -1,5 +1,5 @@
 @echo off
-rem IntegraAI - one-click launcher for Windows.
+rem H.E.D.E.S - one-click launcher for Windows.
 rem Usage:  run.bat            (port 8000)
 rem         run.bat 9000       (custom port)
 rem         run.bat test       (run the test suite instead)
@@ -16,7 +16,7 @@ if not defined PY (
   where python >nul 2>&1 && python -c "import sys; sys.exit(sys.version_info < (3, 10))" >nul 2>&1 && set "PY=python"
 )
 if not defined PY (
-  echo [IntegraAI] Python 3.10 or newer is required. Install it from https://www.python.org/downloads/
+  echo [H.E.D.E.S] Python 3.10 or newer is required. Install it from https://www.python.org/downloads/
   echo             and tick "Add python.exe to PATH" during setup.
   pause
   exit /b 1
@@ -25,13 +25,13 @@ if not defined PY (
 rem --- 2. Virtual environment + dependencies (reinstalled only when requirements change)
 set "VENV=backend\.venv"
 if not exist "%VENV%\Scripts\python.exe" (
-  echo [IntegraAI] Creating virtual environment in %VENV% ...
+  echo [H.E.D.E.S] Creating virtual environment in %VENV% ...
   %PY% -m venv "%VENV%" || goto :fail
 )
 set "VPY=%VENV%\Scripts\python.exe"
 fc /b "backend\requirements.txt" "%VENV%\requirements.installed" >nul 2>&1
 if errorlevel 1 (
-  echo [IntegraAI] Installing dependencies ...
+  echo [H.E.D.E.S] Installing dependencies ...
   "%VPY%" -m pip install --disable-pip-version-check -q --upgrade pip
   "%VPY%" -m pip install --disable-pip-version-check -q -r backend\requirements.txt || goto :fail
   copy /y "backend\requirements.txt" "%VENV%\requirements.installed" >nul
@@ -57,13 +57,13 @@ if not defined PUBLIC_BASE_URL set "PUBLIC_BASE_URL=http://127.0.0.1:%PORT%"
 rem --- 4. Port check, open the browser once the server answers, run --------
 netstat -ano | findstr /r /c:"127.0.0.1:%PORT% .*LISTENING" /c:"0.0.0.0:%PORT% .*LISTENING" >nul
 if not errorlevel 1 (
-  echo [IntegraAI] Port %PORT% is already in use. Stop the other program or run:  run.bat 8001
+  echo [H.E.D.E.S] Port %PORT% is already in use. Stop the other program or run:  run.bat 8001
   pause
   exit /b 1
 )
 
 echo.
-echo   IntegraAI  ^>  %PUBLIC_BASE_URL%
+echo   H.E.D.E.S  ^>  %PUBLIC_BASE_URL%
 echo   Accounts   ^>  builder / admin / owner
 if defined SEED_PASSWORD (echo   Password   ^>  %SEED_PASSWORD%) else (echo   Password   ^>  SEED_PASSWORD in .env)
 echo   API docs   ^>  %PUBLIC_BASE_URL%/docs
@@ -78,6 +78,6 @@ popd
 exit /b 0
 
 :fail
-echo [IntegraAI] Setup failed - see the messages above.
+echo [H.E.D.E.S] Setup failed - see the messages above.
 pause
 exit /b 1
