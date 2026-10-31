@@ -176,3 +176,22 @@ def test_every_email_template_has_its_own_theme():
     m = et.render_sample("healing_fixed", "Acme", "https://h.example")
     assert "Fixed automatically" in m["html"] and "Open the session log" in m["html"] and "https://h.example/#/healing" in m["html"]
     assert "<li" in m["html"] and "Replies are not read" in m["html"]
+
+
+def test_admin_can_mark_a_session_fixed_and_reopen_it(server):
+    admin, builder = login(server, "admin"), login(server, "builder")
+    org_id = admin.get("/api/v1/auth/me").json()["organization"]["id"]
+    with session_scope() as db:
+        case = HealingCase(organization_id=org_id, target="slack.post_message", error_class="not_found", status="needs_admin",
+                           required=["Fix the base URL"], log=[], runs=1)
+        db.add(case)
+        db.flush()
+        cid = case.id
+    assert builder.post(f"/api/v1/healing/cases/{cid}/resolve", json={}).status_code == 403
+    c = admin.post(f"/api/v1/healing/cases/{cid}/resolve", json={"note": "Corrected the base URL by hand"}).json()
+    assert c["status"] == "resolved" and c["resolved_at"] and c["required"] == []
+    assert c["log"][-1]["stage"] == "resolved_by_admin" and "Corrected the base URL" in c["log"][-1]["text"]
+    assert admin.post(f"/api/v1/healing/cases/{cid}/resolve", json={}).status_code == 409
+    c = admin.post(f"/api/v1/healing/cases/{cid}/reopen", json={"note": "still 404"}).json()
+    assert c["status"] == "needs_admin" and c["resolved_at"] is None and c["log"][-1]["stage"] == "reopened"
+    assert any(r["action"] == "healing.resolve" for r in (lambda x: x if isinstance(x, list) else x.get("items", []))(admin.get("/api/v1/audit").json()))

@@ -1,4 +1,4 @@
-import { $, api, esc, icon, badge, agoCell, pageHead, emptyState, toast, fmtTime } from '../lib.js';
+import { $, api, esc, icon, badge, agoCell, pageHead, emptyState, toast, fmtTime, modal } from '../lib.js';
 import { go, isAdmin } from '../app.js';
 import { askAbout } from '../assistant.js';
 
@@ -10,7 +10,7 @@ const STAGE = {
   analysis: ['spark', 'AI analysis'], outcome: ['check', 'Outcome'], notified: ['bell', 'Administrators notified'],
   fix_decision: ['shield', 'Fix decision'], error: ['alert', 'Investigation error'],
   auto_applied: ['check', 'Fix applied automatically'], auto_skip: ['shield', 'Kept for approval'], verified: ['eye', 'Verified after the fix'],
-  rolled_back: ['refresh', 'Rolled back'],
+  rolled_back: ['refresh', 'Rolled back'], resolved_by_admin: ['check', 'Marked fixed by an administrator'], reopened: ['refresh', 'Reopened'],
 };
 const dur = (s) => (s == null ? '—' : s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
 
@@ -81,7 +81,9 @@ async function renderCase({ el, params }) {
       ${pageHead('wrench', c.target, `${esc(c.error_class.replace(/_/g, ' '))} · started ${esc(fmtTime(c.created_at))} · ${c.runs} investigation(s) · seen ${c.occurrences}×`,
         `<button class="btn" id="hl-ask">${icon('spark', 15)} Discuss with AI</button>
          ${c.approval_request_id && c.status === 'awaiting_approval' ? `<a class="btn primary" href="#/approvals/${c.approval_request_id}">Review the fix</a>` : ''}
-         ${isAdmin() ? `<button class="btn" id="retry" ${c.status === 'investigating' ? 'disabled' : ''}>${icon('refresh', 15)} Investigate again</button>` : ''}`)}
+         ${isAdmin() ? `<button class="btn" id="retry" ${c.status === 'investigating' ? 'disabled' : ''}>${icon('refresh', 15)} Investigate again</button>` : ''}
+         ${isAdmin() && ['needs_admin', 'awaiting_approval'].includes(c.status) ? `<button class="btn primary" id="resolve">${icon('check', 15)} Mark as fixed</button>` : ''}
+         ${isAdmin() && c.status === 'resolved' ? `<button class="btn" id="reopen">Reopen</button>` : ''}`)}
       <div class="callout ${outcomeCls}" style="margin-bottom:16px"><div class="row between"><div><b>${esc(CASE_LABEL[c.status] || c.status)}</b>
         ${c.status === 'investigating' ? ' <span class="spinner"></span>' : ''}<div class="small">${esc(c.root_cause || 'Working out the root cause…')}</div></div>
         <div class="small muted nowrap" style="text-align:right">${c.resolved_at ? `fixed ${agoCell(c.resolved_at)}<br>` : ''}took ${dur(c.duration_s)}</div></div></div>
@@ -107,6 +109,19 @@ async function renderCase({ el, params }) {
           ${c.executions?.length ? `<div class="card"><div class="card-head"><h2>Related executions</h2></div><div class="quick-list">${c.executions.map((x) => `<a href="#/monitoring/execution/${x.id}">${badge(x.status)}<div class="grow"><div class="mono small">${esc(x.tool)}</div><div class="muted small">${x.http_status ? `HTTP ${x.http_status} · ` : ''}${agoCell(x.created_at)}</div></div></a>`).join('')}</div></div>` : ''}
           <details class="card card-pad"><summary class="small" style="cursor:pointer"><b>Report sent to administrators</b></summary><pre style="white-space:pre-wrap;margin-top:8px">${esc(c.report)}</pre></details>
         </div></div></div>`;
+    const decide = async (action) => {
+      const fixed = action === 'resolve';
+      const r = await modal({ title: fixed ? 'Mark this session as fixed' : 'Reopen this session',
+        body: `<p class="small" style="margin-top:0">${fixed ? 'Use this when you fixed the problem yourself (for example rotated the credential or corrected the API). The session is closed and the note goes into its log and the audit log.'
+          + (c.status === 'awaiting_approval' ? ' The fix self-healing prepared stays in Approvals; reject it there if it is no longer needed.' : '')
+          : 'The session goes back to needing an administrator.'}</p>
+          <div class="field"><label>Note (optional)</label><textarea name="note" rows="3" maxlength="1000" placeholder="${fixed ? 'e.g. Rotated the Slack token' : 'Why it is not fixed'}"></textarea></div>`,
+        actions: [{ label: 'Cancel', value: null }, { label: fixed ? 'Mark as fixed' : 'Reopen', cls: 'primary',
+          handler: (root) => api(`/healing/cases/${c.id}/${action}`, { method: 'POST', body: { note: root.querySelector('[name=note]').value } }) }] });
+      if (r) { toast(fixed ? 'Marked as fixed' : 'Reopened', 'ok'); paint(); }
+    };
+    $('#resolve', el)?.addEventListener('click', () => decide('resolve'));
+    $('#reopen', el)?.addEventListener('click', () => decide('reopen'));
     $('#retry', el)?.addEventListener('click', async () => {
       try { await api(`/healing/cases/${c.id}/retry`, { method: 'POST' }); toast('Investigating again', 'ok'); paint(); } catch (err) { toast(err.message, 'bad'); }
     });

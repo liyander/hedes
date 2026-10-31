@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from ..core.db import get_db
+from ..core.db import get_db, utcnow
 from ..core.security import Principal, current_principal, require_human, require_role
 from ..models import ApprovalRequest, Execution, HealingCase, Integration, IntegrationVersion
-from ..services import healing
+from ..services import audit, healing
 from ..services.ai_gateway import strip_wrappers
 from .common import iso, like_pattern
 
@@ -83,6 +84,40 @@ def retry_case(cid: str, p: Principal = Depends(require_human("admin")), db: Ses
     healing._queue(db, c)
     db.commit()
     return case_view(c)
+
+
+class ResolveIn(BaseModel):
+    note: str = Field(default="", max_length=1000)
+
+
+@router.post("/healing/cases/{cid}/resolve")
+def resolve_case(cid: str, body: ResolveIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+    """An administrator marks a session fixed (for example after rotating a credential or correcting the API by hand)."""
+    c = _case(db, p, cid)
+    if c.status == "resolved":
+        raise HTTPException(409, "This session is already marked fixed")
+    if c.status == "investigating":
+        raise HTTPException(409, "Wait for the running investigation to finish")
+    pending = c.status == "awaiting_approval"
+    c.status, c.resolved_at, c.required, c.still_failing = "resolved", utcnow(), [], ""
+    healing.log_event(c, "resolved_by_admin", f"{p.user.username} marked this fixed" + (f": {body.note.strip()}" if body.note.strip() else "")
+                      + (" (the prepared fix is still waiting in Approvals)" if pending else ""), True)
+    audit.record(db, p.org_id, p, "healing.resolve", c.target, case_id=c.id, note=body.note[:300])
+    db.commit()
+    return case_view(c, db, full=True)
+
+
+@router.post("/healing/cases/{cid}/reopen")
+def reopen_case(cid: str, body: ResolveIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+    """Undo "mark as fixed": the session needs an administrator again."""
+    c = _case(db, p, cid)
+    if c.status != "resolved":
+        raise HTTPException(409, "Only a fixed session can be reopened")
+    c.status, c.resolved_at = "needs_admin", None
+    healing.log_event(c, "reopened", f"{p.user.username} reopened this session" + (f": {body.note.strip()}" if body.note.strip() else ""), False)
+    audit.record(db, p.org_id, p, "healing.reopen", c.target, case_id=c.id, note=body.note[:300])
+    db.commit()
+    return case_view(c, db, full=True)
 
 
 @router.post("/executions/{eid}/heal")
