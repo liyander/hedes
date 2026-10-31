@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -78,9 +79,22 @@ async def unhandled(_request: Request, exc: Exception):
     return JSONResponse({"detail": "Internal server error"}, status_code=500)
 
 
+APP_DIR = Path(__file__).resolve().parent
+
+
+def code_version() -> str:
+    """Newest modification time of the server's Python code."""
+    return format(max(f.stat().st_mtime_ns for f in APP_DIR.rglob("*.py")) // 1_000_000, "x")
+
+
+STARTED_CODE = code_version()
+
+
 @app.get("/api/v1/health")
 def health():
-    return {"ok": True}
+    # "stale": the Python code on disk changed after this process started (e.g. after a git pull without a restart).
+    # The web pages are always served fresh, but new API routes only exist after a restart.
+    return {"ok": True, "code": STARTED_CODE, "stale": code_version() != STARTED_CODE}
 
 
 _static = StaticFiles(directory=STATIC_DIR)

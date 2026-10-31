@@ -71,13 +71,24 @@ function shell() {
         <button class="btn ghost icon" data-act="theme" aria-label="Toggle theme">${icon('moon')}</button>
         <div class="pop alerts" id="alert-pop" hidden></div>
       </header>
+      <div class="stale-banner" id="stale-banner" hidden>${icon('refresh', 15)} <span><b>H.E.D.E.S was updated on disk.</b> Restart the server (close its window and run <code>run.bat</code> again) so the new features work. Until then some actions may answer "not available".</span></div>
       <main class="content" id="content"></main>
     </div>
   </div>`;
 }
 
+async function checkServer() {
+  try {
+    const h = await (await fetch('/api/v1/health', { cache: 'no-store' })).json();
+    const b = $('#stale-banner');
+    if (b) b.hidden = !h.stale;
+  } catch (e) { /* offline: the next poll tries again */ }
+}
+window.addEventListener('hedes:stale', () => { const b = $('#stale-banner'); if (b) b.hidden = false; });
+
 async function refreshCounts() {
   if (!state.user) return;
+  checkServer();
   try {
     const [alerts, m, src, heal] = await Promise.all([api('/alerts'), api('/monitoring/metrics'), api('/sources').catch(() => null), api('/healing/cases?limit=1').catch(() => null)]);
     state.alerts = alerts;
