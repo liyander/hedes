@@ -4,7 +4,7 @@ import re
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -156,6 +156,23 @@ def list_providers(p: Principal = Depends(current_principal), db: Session = Depe
 PROVIDER_TYPES = "^(openai_compatible|anthropic|gemini|bedrock)$"
 
 
+SECRET_FIELDS = ("api_key", "aws_access_key_id", "aws_secret_access_key", "aws_session_token")
+
+
+def clean_secret(value: str | None) -> str | None:
+    """Trim a pasted key and reject what cannot be a key, with a message that says what went wrong."""
+    if value is None:
+        return None
+    v = value.strip()
+    if not v:
+        return v
+    if re.match(r"(?i)^https?://", v):
+        raise ValueError("this looks like a URL, not a key. Put the URL in Base URL and paste only the key here")
+    if re.search(r"[\s\x00-\x1f\x7f]", v):
+        raise ValueError("the key contains spaces, tabs or line breaks. Paste only the key itself")
+    return v
+
+
 class ProviderDraft(BaseModel):
     """Connection settings for a provider that is not saved yet (listing models, testing before saving)."""
     provider_type: str = Field(pattern=PROVIDER_TYPES)
@@ -166,6 +183,16 @@ class ProviderDraft(BaseModel):
     aws_secret_access_key: str = Field(default="", max_length=2000)
     aws_session_token: str = Field(default="", max_length=8000)
     model_id: str = Field(default="", max_length=300)
+
+    @field_validator(*SECRET_FIELDS)
+    @classmethod
+    def _secret(cls, v: str) -> str:
+        return clean_secret(v)
+
+    @field_validator("base_url", "region", "model_id")
+    @classmethod
+    def _trim(cls, v: str) -> str:
+        return v.strip()
 
 
 class ProviderIn(ProviderDraft):
@@ -281,6 +308,11 @@ class ProviderPatch(BaseModel):
     aws_access_key_id: str | None = Field(default=None, max_length=128)
     aws_secret_access_key: str | None = Field(default=None, max_length=2000)
     aws_session_token: str | None = Field(default=None, max_length=8000)
+
+    @field_validator(*SECRET_FIELDS)
+    @classmethod
+    def _secret(cls, v: str | None) -> str | None:
+        return clean_secret(v)
 
 
 @router.patch("/providers/{pid}")

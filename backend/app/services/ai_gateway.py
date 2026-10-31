@@ -91,13 +91,23 @@ def extract_json(text: str) -> object:
 
 # ---------------------------------------------------------------------------- provider adapters
 
+BAD_HEADER = ("The API key (or another header value) contains characters that cannot be sent, such as spaces, tabs or line breaks, "
+              "or it is a URL. Paste only the key itself in the provider's key field.")
+
+
+def _transport_error(e: Exception) -> ProviderError:
+    if "Illegal header value" in str(e) or "header" in type(e).__name__.lower():
+        return ProviderError(BAD_HEADER, retryable=False)
+    return ProviderError(f"network error: {e}")
+
+
 def _post(url: str, headers: dict, body: dict, timeout: float) -> dict:
     try:
         r = httpx.post(url, headers=headers, json=body, timeout=timeout)
     except httpx.TimeoutException:
         raise ProviderError("timeout")
     except httpx.TransportError as e:
-        raise ProviderError(f"network error: {e}")
+        raise _transport_error(e)
     if r.status_code >= 400:
         retryable = r.status_code in (408, 409, 429) or r.status_code >= 500
         raise ProviderError(f"HTTP {r.status_code}: {r.text[:300]}", retryable or r.status_code in (400, 404))
@@ -195,7 +205,7 @@ def _call_bedrock(base: str, key: str, model: str, system: str, messages: list, 
     except httpx.TimeoutException:
         raise ProviderError("timeout")
     except httpx.TransportError as e:
-        raise ProviderError(f"network error: {e}")
+        raise _transport_error(e)
     if r.status_code >= 400:
         detail = r.text[:300]
         retryable = r.status_code in (408, 429, 500, 502, 503, 504, 424)
@@ -216,7 +226,7 @@ def _get_json(url: str, headers: dict, params: dict | None = None) -> dict:
     except httpx.TimeoutException:
         raise ProviderError("timeout while listing models")
     except httpx.TransportError as e:
-        raise ProviderError(f"network error: {e}")
+        raise _transport_error(e)
     if r.status_code >= 400:
         raise ProviderError(f"HTTP {r.status_code}: {r.text[:300]}", retryable=False)
     try:
