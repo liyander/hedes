@@ -23,11 +23,18 @@ class Base(DeclarativeBase):
 
 
 _url = get_settings().database_url
+# Hosted Postgres (Neon, Render, ...) hands out postgresql:// URLs; the installed driver is psycopg 3.
+for _prefix in ("postgres://", "postgresql://"):
+    if _url.startswith(_prefix):
+        _url = "postgresql+psycopg://" + _url[len(_prefix):]
 _is_sqlite = _url.startswith("sqlite")
 engine = create_engine(
     _url,
-    connect_args={"check_same_thread": False, "timeout": 30} if _is_sqlite else {},
+    # prepare_threshold=None: no server-side prepared statements, which transaction-mode poolers (Neon -pooler) can't share.
+    connect_args={"check_same_thread": False, "timeout": 30} if _is_sqlite else {"prepare_threshold": None},
     pool_pre_ping=True,
+    # Neon closes idle connections when the compute scales to zero; recycle before that happens.
+    pool_recycle=300,
 )
 
 if _is_sqlite:
