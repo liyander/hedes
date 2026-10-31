@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from ..core.db import get_db
+from ..core.db import get_db, utcnow
 from ..core.security import Principal, hash_password, require_human, require_role
 from ..models import Membership, User
 from ..services import audit
@@ -101,6 +101,8 @@ def update_user(mid: str, body: UserPatch, p: Principal = Depends(require_human(
         m.role = body.role
     if body.status:
         u.status = body.status  # disabled accounts cannot sign in, and their sessions and API tokens stop working
+        if body.status == "disabled":
+            u.sessions_valid_after = utcnow()  # re-enabling the account does not bring its old sessions back
     audit.record(db, p.org_id, p, "user.update", u.username, **changes)
     db.commit()
     return _view(m, u)
@@ -115,6 +117,7 @@ def reset_password(mid: str, body: PasswordIn, p: Principal = Depends(require_hu
     m, u = _member(db, p, mid)
     _guard_owner(p, m.role)
     u.password_hash = hash_password(body.password)
+    u.sessions_valid_after = utcnow()  # signs the account out everywhere
     audit.record(db, p.org_id, p, "user.password_reset", u.username)
     db.commit()
     return {"ok": True}

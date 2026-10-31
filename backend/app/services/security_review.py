@@ -63,7 +63,7 @@ def review(config: dict, policy: dict | None = None, connections: dict[str, dict
         add("critical", "destination_blocked", "Destination is not allowed", str(e), True)
     allowed = policy.get("allowed_domains") or []
     if allowed and not egress.domain_allowed(host, allowed) and checks["destination_checked"]:
-        if not any(base.startswith(p) for p in egress.get_settings().egress_allowlist):
+        if not egress.allowlisted(base + "/"):
             add("high", "destination_unlisted", "Destination outside the organisation allow-list",
                 f"{host} is not in allowed_domains ({', '.join(allowed)}). Runtime calls will be refused until it is added.", True)
 

@@ -1,4 +1,4 @@
-import { $, api, esc, icon, badge, md, json, ago, toast, readFile, riskBadge, modal } from '../lib.js';
+import { $, api, esc, icon, badge, md, json, ago, toast, readFile, riskBadge, modal, method } from '../lib.js';
 import { connectModal } from './credentials.js';
 import { state } from '../app.js';
 import { modeBar, renderAssistantPage } from '../assistant.js';
@@ -103,7 +103,7 @@ export async function render({ el, params }) {
       }).join('')}</ul></div>` : ''}
       ${session.integrations.map(integrationCard).join('')}
       ${(session.sources || []).length ? `<div class="card card-pad"><h2 style="margin-bottom:8px">Sources referred</h2><ul class="small" style="margin:0;padding-left:18px">
-        ${session.sources.map((x) => `<li>${esc(x.label)}${x.url ? ` — <a class="link" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a>` : ''}</li>`).join('')}</ul></div>` : ''}
+        ${session.sources.map((x) => `<li>${esc(x.label)}${/^https?:\/\//i.test(x.url || '') ? ` — <a class="link" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a>` : ''}</li>`).join('')}</ul></div>` : ''}
       ${session.workflow ? `<div class="card card-pad"><div class="row between"><div><h2>Workflow draft</h2><div class="muted small">${esc(session.workflow.name)}</div></div><a class="btn" href="#/workflows/${session.workflow.id}">${icon('flow', 15)} Open editor</a></div></div>` : ''}
     </div>`;
   }
@@ -128,7 +128,6 @@ export async function render({ el, params }) {
         : i.tests ? i.tests.cases.map((c) => `<div class="finding">${badge(c.passed ? 'passed' : 'failed')}<div><b class="small">${esc(c.name)}</b><div class="small muted">expected ${esc(c.expect)} · got ${esc(c.actual)}</div></div></div>`).join('') : '<p class="muted">No tests yet.</p>'}
       </div></div>`;
   }
-  const method = (m) => `<span class="method ${esc(m)}">${esc(m)}</span>`;
 
   async function reload() {
     session = await api(`/ai/sessions/${session.id}`);

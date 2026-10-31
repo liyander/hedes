@@ -34,6 +34,8 @@ log = logging.getLogger("integra.slack")
 API = "https://slack.com/api/"
 CODE_TTL = 600
 _CODES: dict[str, tuple[str, str, float]] = {}  # sha256(code) -> (org_id, user_id, expires)
+_LINK_FAILS: dict[str, list[float]] = {}  # org_id:slack_user -> times of recent wrong codes
+LINK_MAX_FAILS = 5
 _LOCK = threading.Lock()
 STATUS: dict[str, dict] = {}  # org_id -> {"state", "detail", "since"}
 LAST_EVENT: dict[str, str] = {}  # org_id -> when Slack last delivered a message or button click
@@ -154,12 +156,22 @@ def new_link_code(org_id: str, user_id: str) -> str:
 
 
 def redeem_link_code(db: Session, org: Organization, code: str, slack_user: str) -> User | None:
-    key = hashlib.sha256(f"{org.id}:{code}".encode()).hexdigest()
+    key, now = hashlib.sha256(f"{org.id}:{code}".encode()).hexdigest(), time.time()
+    fail_key = f"{org.id}:{slack_user}"
     with _LOCK:
+        # A linked Slack user acts as that H.A.D.E.S account, so six-digit codes must not be guessable by trying them all.
+        fails = [t for t in _LINK_FAILS.get(fail_key, []) if now - t < CODE_TTL]
+        if len(fails) >= LINK_MAX_FAILS:
+            _LINK_FAILS[fail_key] = fails
+            return None
         entry = _CODES.pop(key, None)
-    if not entry or entry[2] < time.time():
-        return None
+        if not entry or entry[2] < now:
+            _LINK_FAILS[fail_key] = [*fails, now]
+            return None
+        _LINK_FAILS.pop(fail_key, None)
     user = db.get(User, entry[1])
+    if not user:
+        return None
     cfg = config_of(org)
     cfg["links"] = {**(cfg.get("links") or {}), slack_user: user.id}
     save_config(db, org, cfg)

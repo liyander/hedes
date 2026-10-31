@@ -121,19 +121,28 @@ def scopes_for(provider: str) -> list[str]:
 
 # ----------------------------------------------------------------------------------------------- the flow
 
-def start(db: Session, org_id: str, user_id: str, provider: str, connection_name: str) -> tuple[str, str]:
+def _check_replace(conn: Connection | None, name: str, user_id: str, admin: bool) -> None:
+    """Signing in again replaces a credential. Like rotating a secret, only its creator or an administrator may do that:
+    otherwise anyone could swap the organisation's connection for their own account."""
+    if conn and conn.status != "revoked" and not admin and conn.created_by != user_id:
+        raise OAuthError(f"A credential named {name!r} was connected by someone else. Only they or an administrator can replace it.")
+
+
+def start(db: Session, org_id: str, user_id: str, provider: str, connection_name: str, admin: bool = False) -> tuple[str, str]:
     """Returns (authorize URL, browser nonce). The nonce goes into a cookie: only the browser that started the
     sign-in can finish it, so nobody can make you link their account by sending you a link."""
     if provider not in PROVIDERS:
         raise OAuthError("Unknown provider")
     app, _ = _app(db, org_id, provider)
+    _check_replace(db.scalars(select(Connection).where(Connection.organization_id == org_id, Connection.name == connection_name)).first(),
+                   connection_name, user_id, admin)
     state, nonce, verifier = secrets.token_urlsafe(24), secrets.token_urlsafe(24), secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     now = time.time()
     with _STATE_LOCK:
         for k in [k for k, v in _STATES.items() if now - v["at"] > STATE_TTL]:
             _STATES.pop(k, None)
-        _STATES[state] = {"org_id": org_id, "user_id": user_id, "provider": provider, "name": connection_name,
+        _STATES[state] = {"org_id": org_id, "user_id": user_id, "admin": admin, "provider": provider, "name": connection_name,
                           "verifier": verifier, "nonce": nonce, "at": now}
     params = {"response_type": "code", "client_id": app["client_id"], "redirect_uri": redirect_uri(), "state": state,
               "scope": " ".join(scopes_for(provider)), "code_challenge": challenge, "code_challenge_method": "S256",
@@ -196,6 +205,7 @@ def finish(db: Session, state: str, code: str, nonce: str) -> Connection:
     conn = db.scalars(select(Connection).where(Connection.organization_id == st["org_id"], Connection.name == st["name"])).first()
     if conn and conn.auth_type != AUTH_TYPE and conn.status != "revoked":
         raise OAuthError(f"A credential named {st['name']!r} of another type already exists.")
+    _check_replace(conn, st["name"], st["user_id"], st["admin"])  # again: it may have been created during the sign-in
     if conn:
         vault.delete_secret(db, conn.secret_ref)
     else:
@@ -235,7 +245,7 @@ def fresh_secret(db: Session, conn: Connection, secret: dict | None) -> dict | N
                 try:
                     app, client_secret = _app(own, c.organization_id, current["provider"])
                     body = _post_token(current["provider"], app, client_secret, {"grant_type": "refresh_token", "refresh_token": current["refresh_token"]})
-                except (OAuthError, httpx.HTTPError) as e:
+                except (OAuthError, httpx.HTTPError, egress.EgressDenied) as e:  # e.g. the token host does not resolve
                     log.warning("token refresh for %s failed: %s", c.name, e)
                     c.last_test_result = f"refresh failed: {str(e)[:170]}"
                     return secret

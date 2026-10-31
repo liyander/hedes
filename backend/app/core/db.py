@@ -23,7 +23,7 @@ class Base(DeclarativeBase):
 
 
 _url = get_settings().database_url
-# Hosted Postgres (Neon, Render, ...) hands out postgresql:// URLs; the installed driver is psycopg 3.
+# Hosted Postgres (Neon, ...) hands out postgresql:// URLs; the installed driver is psycopg 3.
 for _prefix in ("postgres://", "postgresql://"):
     if _url.startswith(_prefix):
         _url = "postgresql+psycopg://" + _url[len(_prefix):]

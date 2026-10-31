@@ -328,6 +328,8 @@ def generate_config(gw: Gateway, svc: dict, req: dict, documents: list[dict]) ->
             prompt = f"Requirements:\n{json.dumps(req, indent=1)}\n\nGenerate the configuration for the service {svc['name']!r} with integration.id {svc['slug']!r} and credential_ref {svc['slug']!r}."
             res = gw.structured("config_generation", system, prompt, schema, local=lambda: {},
                                 validate_extra=lambda d: [e["message"] for e in validate_config(normalize_config(d))["errors"]][:8])
+            if res.local:  # every model failed, and the offline one knows nothing about this service
+                raise ValueError(f"No documentation for {svc['name']}, and no AI model could draft it. Upload its OpenAPI document.")
             cfg = normalize_config(res.data)
             cfg["integration"]["id"] = svc["slug"]
             meta.update(model=res.model, note="Generated from model knowledge - not verified against documentation.")

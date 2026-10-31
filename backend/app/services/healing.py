@@ -297,6 +297,8 @@ def _documented_paths(db: Session, integ: Integration, method: str) -> list[str]
 def endpoint_exists(db: Session, integ: Integration, config: dict, op: dict) -> tuple[bool | None, str]:
     """Does this operation's URL exist? A harmless GET (no body) - a 404/410 means no, anything else (even 401/405) means yes.
     None when the path has parameters that cannot be filled in without real inputs."""
+    from urllib.parse import urlsplit
+
     import httpx
 
     from . import egress
@@ -310,7 +312,11 @@ def endpoint_exists(db: Session, integ: Integration, config: dict, op: dict) -> 
         return False, f"{url} is not allowed: {e}"
     req = engine.PreparedRequest("GET", url, {}, {k: str(v) for k, v in (integ_cfg.get("default_headers") or {}).items()})
     auth = integ_cfg.get("authentication") or {}
-    if auth.get("type") in ("bearer", "api_key_header", "api_key_query", "basic", "ssws"):
+    live = db.get(IntegrationVersion, integ.published_version_id) if integ.published_version_id else None
+    live_host = urlsplit(live.config["integration"]["base_url"]).netloc.lower() if live else None
+    # The credential only goes to the host the published configuration already sends it to. A candidate on another
+    # host (suggested by the AI, say) is checked without it: a real endpoint still answers 401/403 there, not 404.
+    if auth.get("type") in ("bearer", "api_key_header", "api_key_query", "basic", "ssws") and urlsplit(url).netloc.lower() == live_host:
         try:
             engine.apply_auth(req, auth, runtime.credential_for(db, integ.organization_id, config))
         except engine.EngineError:

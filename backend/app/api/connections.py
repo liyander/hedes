@@ -125,15 +125,15 @@ def _owned(db: Session, p: Principal, cid: str) -> Connection:
 
 class RotateIn(BaseModel):
     auth_type: str = Field(pattern=AUTH_TYPES)
-    token: str | None = None
-    api_key: str | None = None
-    username: str | None = None
-    password: str | None = None
-    client_id: str | None = None
-    client_secret: str | None = None
-    access_key_id: str | None = None
-    secret_access_key: str | None = None
-    session_token: str | None = None
+    token: str | None = Field(default=None, max_length=4000)
+    api_key: str | None = Field(default=None, max_length=4000)
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, max_length=4000)
+    client_id: str | None = Field(default=None, max_length=500)
+    client_secret: str | None = Field(default=None, max_length=4000)
+    access_key_id: str | None = Field(default=None, max_length=128)
+    secret_access_key: str | None = Field(default=None, max_length=4000)
+    session_token: str | None = Field(default=None, max_length=8000)
     expires_at: datetime | None = None  # the new secret's expiry (omit when it does not expire)
 
 
@@ -180,8 +180,10 @@ def test_connection(cid: str, p: Principal = Depends(require_role("user")), db: 
                   "operations": [{"id": "probe", "method": "GET", "path": path or "/", "input_schema": {"type": "object"}, "response": {"status_codes": [200, 204]}}]}}
         op_id = "probe"
     else:
-        for i in db.scalars(select(Integration).where(Integration.organization_id == p.org_id)).all():
-            v = db.get(IntegrationVersion, i.published_version_id or i.latest_version_id) if (i.published_version_id or i.latest_version_id) else None
+        # Only a published (administrator-approved) configuration may receive the secret: anyone can write a draft whose
+        # base URL points somewhere else, and pressing Test must not send the credential there.
+        for i in db.scalars(select(Integration).where(Integration.organization_id == p.org_id, Integration.status == "published")).all():
+            v = db.get(IntegrationVersion, i.published_version_id) if i.published_version_id else None
             if not v or (v.config["integration"].get("authentication") or {}).get("credential_ref") != c.name:
                 continue
             op = next((o for o in v.config["integration"]["operations"] if o["method"] == "GET"
@@ -192,7 +194,8 @@ def test_connection(cid: str, p: Principal = Depends(require_role("user")), db: 
                 next(o for o in target["integration"]["operations"] if o["id"] == op_id).pop("pagination", None)
                 break
     if not target:
-        return {"ok": None, "message": "Nothing safe to test against: no read-only operation without inputs uses this connection. Set a test URL."}
+        return {"ok": None, "message": "Nothing safe to test against yet: no published integration has a read-only operation without inputs "
+                                       "that uses this credential. It can be tested once one is approved (or create it again with a test URL)."}
     res = engine.execute(target, op_id, {}, credential=secret, allowed_domains=org_policy(db, p.org_id).get("allowed_domains") or [])
     ok = res.status == "succeeded" or res.error_class == "response_drift"
     c.last_tested_at = utcnow()

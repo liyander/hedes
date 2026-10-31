@@ -2,7 +2,8 @@ import { $, api, esc, icon, md, badge, toast, ago, modal } from './lib.js';
 import { setDrawer } from './help.js';
 
 // Conversation state is shared by the floating drawer and the full AI Studio page, so a chat can move between them.
-const S = { threadId: sessionStorage.getItem('hedes-thread') || null, messages: [], tags: [], busy: false, status: null, threads: [] };
+const savedThread = () => { try { return sessionStorage.getItem('hedes-thread'); } catch (e) { return null; } };  // storage can be blocked
+const S = { threadId: savedThread() || null, messages: [], tags: [], busy: false, status: null, threads: [] };
 
 const TOOL_LABEL = {
   run_source: 'Run a data source now', test_source: 'Test a data source (fetch one page, store nothing)', set_source: 'Change a data source',
@@ -84,7 +85,7 @@ function welcome(compact) {
   return `<div class="awelcome"><h3>Ask me anything about H.A.D.E.S</h3>
     <p class="muted small">I can explain pages and options, look into your integrations and data sources, troubleshoot failures, and perform actions — <b>every change waits for your approval</b>. Type <code>@</code> to tag an integration, source, workflow or credential so I can read it directly.</p>
     <div class="suggest one">${SUGGESTIONS.map((s) => `<button data-suggest="${esc(s)}">${esc(s)}</button>`).join('')}</div>
-    ${compact ? '' : ''}<p class="small muted" style="margin-top:10px">You are on <b>${esc(page)}</b>; I know what this page does.</p></div>`;
+    <p class="small muted" style="margin-top:10px">You are on <b>${esc(page)}</b>; I know what this page does.</p></div>`;
 }
 
 export function mountAssistant(root, { compact = false } = {}) {
@@ -241,7 +242,6 @@ export async function renderAssistantPage({ el }) {
       <div id="t-list">${S.threads.length ? S.threads.map((t) => `<a href="#/studio" data-thread="${t.id}" class="${t.id === S.threadId ? 'active' : ''}"><b>${esc(t.title)}</b><small>${ago(t.updated_at)}</small></a>`).join('') : '<p class="muted small" style="padding:0 16px">No conversations yet.</p>'}</div></aside>
     <section class="chat" id="a-host"></section></div>`;
   const cleanup = mountAssistant($('#a-host', el), { compact: false });
-  const un = () => { /* thread list refreshes on navigation */ };
   el.addEventListener('click', async (e) => {
     if (e.target.closest('#can-do')) {
       return modal({ title: 'What the assistant can do', wide: true, actions: [{ label: 'Close', value: null }], body: `<ol class="small guide-list"><li><b>Ask</b> anything: pages, options, errors, how to connect a service.</li><li><b>Tag</b> with <code>@</code> so it reads that integration, source, workflow or credential (never secrets).</li><li>It <b>looks things up</b> on its own (read-only).</li><li>Anything that changes data or calls an external API becomes an <b>approval card</b> with the exact inputs. It runs only when you approve, with your permissions, and is audited.</li></ol>
@@ -254,5 +254,5 @@ export async function renderAssistantPage({ el }) {
     if (t.id === 't-new') newThread(); else await openThread(t.dataset.thread);
     el.querySelectorAll('[data-thread]').forEach((a) => a.classList.toggle('active', a.dataset.thread === S.threadId));
   });
-  return () => { cleanup(); un(); };
+  return cleanup;
 }

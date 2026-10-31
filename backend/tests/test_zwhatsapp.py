@@ -139,7 +139,8 @@ def test_pending_approval_is_sent_and_approved_from_the_fix_link(admin, builder,
     token = _token(msg)
     ctx = admin.get(f"/api/v1/fix/{token}").json()
     assert ctx["approval"]["id"] == rid and ctx["approval"]["blockers"] == []
-    r = admin.post(f"/api/v1/fix/{token}/approve", json={})
+    assert admin.post(f"/api/v1/fix/{token}/approve", json={}).status_code == 409   # it must name the review the page showed
+    r = admin.post(f"/api/v1/fix/{token}/approve", json={"request_id": rid})
     assert r.status_code == 200, r.text
     assert r.json()["approval"]["decision"] == "approved"
     assert admin.get(f"/api/v1/admin/approvals/{rid}").json()["decision"] == "approved"

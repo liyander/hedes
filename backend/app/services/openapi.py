@@ -9,6 +9,7 @@ import yaml
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete")
 LIST_KEYS = ("items", "data", "results", "records", "values", "entries")
+MAX_NODES = 200_000  # objects a document may expand to once its $refs are inlined
 
 
 class OpenAPIError(ValueError):
@@ -28,8 +29,14 @@ def load_document(text: str) -> dict:
     return doc
 
 
-def _resolve(doc: dict, node: Any, seen: tuple = ()) -> Any:
-    """Inline local $refs. Recursive references (and chains deeper than 12) resolve to {}."""
+def _resolve(doc: dict, node: Any, seen: tuple = (), budget: list | None = None) -> Any:
+    """Inline local $refs. Recursive references (and chains deeper than 12) resolve to {}. ``budget`` counts the objects
+    produced: a few KB whose references (or YAML aliases) each repeat the previous level would otherwise expand
+    exponentially and hang the request."""
+    budget = [MAX_NODES] if budget is None else budget
+    budget[0] -= 1
+    if budget[0] < 0:
+        raise OpenAPIError("The document expands to too many objects once its $refs are inlined; split or simplify it")
     if isinstance(node, dict):
         if "$ref" in node and isinstance(node["$ref"], str):
             ref = node["$ref"]
@@ -38,10 +45,10 @@ def _resolve(doc: dict, node: Any, seen: tuple = ()) -> Any:
             target: Any = doc
             for part in ref[2:].split("/"):
                 target = target.get(part.replace("~1", "/").replace("~0", "~"), {}) if isinstance(target, dict) else {}
-            return _resolve(doc, target, seen + (ref,))
-        return {k: _resolve(doc, v, seen) for k, v in node.items()}
+            return _resolve(doc, target, seen + (ref,), budget)
+        return {k: _resolve(doc, v, seen, budget) for k, v in node.items()}
     if isinstance(node, list):
-        return [_resolve(doc, v, seen) for v in node]
+        return [_resolve(doc, v, seen, budget) for v in node]
     return node
 
 
@@ -66,6 +73,13 @@ def _json_content(content: dict | None) -> dict:
 
 
 def parse_openapi(text: str) -> dict:
+    try:
+        return _parse_openapi(text)
+    except (AttributeError, TypeError, KeyError, IndexError, RecursionError) as e:  # a field of an unexpected type or shape
+        raise OpenAPIError(f"The document does not have the structure of an OpenAPI 3 document ({type(e).__name__}); check it in an OpenAPI validator")
+
+
+def _parse_openapi(text: str) -> dict:
     raw = load_document(text)
     if "swagger" in raw:
         raise OpenAPIError("Swagger 2.0 is not supported; convert the document to OpenAPI 3.x")

@@ -22,6 +22,8 @@ os.environ.update({
     "SECRET_ENCRYPTION_KEY": "uLpQ4cW7l1PZxH6m0bQy3VqB2T9a8kq1xK3lJf0Hn5Y=",
     "RUN_SCHEDULER": "false", "DEMO_MODE": "true", "CONNECTION_ENV_VARS": "SOME_VAR",
     "OPENAI_API_KEY": "", "ANTHROPIC_API_KEY": "", "GEMINI_API_KEY": "",
+    # a developer's .env must not register a real Bedrock provider in the test run
+    "BEDROCK_MODEL_ID": "", "AWS_ACCESS_KEY_ID": "", "AWS_SECRET_ACCESS_KEY": "", "AWS_SESSION_TOKEN": "", "AWS_BEARER_TOKEN_BEDROCK": "",
 })
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

@@ -72,7 +72,7 @@ async function renderEditor({ el, params }) {
     const edge = (a, b) => `<path d="M${a.x + 220} ${a.y + 34} C ${a.x + 245} ${a.y + 34}, ${b.x - 25} ${b.y + 34}, ${b.x} ${b.y + 34}"/>`;
     const edges = graph.nodes.flatMap((n) => ((n.depends_on || []).length ? n.depends_on.filter((x) => pos[x]).map((x) => edge(pos[x], pos[n.id])) : [edge(pos.__trigger, pos[n.id])])).join('');
     return `<div class="wf-canvas" style="height:${Math.max(340, h + 20)}px"><svg class="edges" width="${w}" height="${h}">${edges}</svg>
-      <div class="wf-node trigger ${sel === '__trigger' ? 'sel' : ''}" data-node="__trigger" style="left:${pos.__trigger.x}px;top:${pos.__trigger.y}px"><b>${icon('play', 13)} Trigger</b><div class="t">${esc(graph.trigger.type)}${graph.trigger.type === 'schedule' ? ` · every ${graph.trigger.interval_minutes || 60} min` : ''}${graph.trigger.type === 'automatic' ? ` · on ${esc(graph.trigger.event || '?')}${(graph.trigger.conditions || []).length ? ` · ${graph.trigger.conditions.length} condition(s)` : ''}` : ''}</div></div>
+      <div class="wf-node trigger ${sel === '__trigger' ? 'sel' : ''}" data-node="__trigger" style="left:${pos.__trigger.x}px;top:${pos.__trigger.y}px"><b>${icon('play', 13)} Trigger</b><div class="t">${esc(graph.trigger.type)}${graph.trigger.type === 'schedule' ? ` · every ${esc(graph.trigger.interval_minutes || 60)} min` : ''}${graph.trigger.type === 'automatic' ? ` · on ${esc(graph.trigger.event || '?')}${(graph.trigger.conditions || []).length ? ` · ${graph.trigger.conditions.length} condition(s)` : ''}` : ''}</div></div>
       ${graph.nodes.map((n) => `<div class="wf-node ${sel === n.id ? 'sel' : ''} ${st[n.id] ? `st-${st[n.id]}` : ''}" data-node="${esc(n.id)}" style="left:${pos[n.id].x}px;top:${pos[n.id].y}px">
         <b>${esc(n.label || n.id)}</b><div class="t">${esc(n.tool)}</div>${(n.when || []).length ? `<div class="cond">if ${n.when.map((c) => `${esc(c.left)} ${esc(c.op)} ${esc(c.right ?? '')}`).join(' and ')}</div>` : ''}${st[n.id] ? `<div style="margin-top:4px">${badge(st[n.id])}</div>` : ''}</div>`).join('')}
     </div>`;
@@ -84,7 +84,7 @@ async function renderEditor({ el, params }) {
       const ev = events[t.event];
       return `<div class="card-body"><h3 style="font-size:15px;margin-bottom:10px">Trigger</h3>
         <div class="field"><label>Type</label><select id="tt">${['manual', 'webhook', 'schedule', 'automatic'].map((x) => `<option ${x === t.type ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
-        ${t.type === 'schedule' ? `<div class="field"><label>Every N minutes</label><input type="number" id="ti" min="1" value="${t.interval_minutes || 60}"></div>` : ''}
+        ${t.type === 'schedule' ? `<div class="field"><label>Every N minutes</label><input type="number" id="ti" min="1" value="${esc(t.interval_minutes || 60)}"></div>` : ''}
         ${t.type === 'automatic' ? `<div class="field"><label>Start when</label><select id="tev">${Object.entries(events).map(([k, e]) => `<option value="${esc(k)}" ${k === t.event ? 'selected' : ''}>${esc(e.description)}</option>`).join('')}</select>
           ${ev ? `<div class="hint">Event fields: ${ev.fields.map((f) => `<code>\${trigger.${esc(f)}}</code>`).join(' ')}</div>` : ''}</div>
           <div class="field"><label>Only if (all must hold)</label><div id="tconds">${(t.conditions || []).map((c, i) => condRow(c, i)).join('')}</div><button class="btn sm" id="add-tcond">${icon('plus', 13)} Condition</button>
