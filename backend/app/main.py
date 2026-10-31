@@ -25,10 +25,11 @@ _stop = threading.Event()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    from . import seed
+    from . import maintenance, seed
     init_db()
     with session_scope() as db:
         seed.run(db)
+        maintenance.close_interrupted_runs(db)
     if get_settings().run_scheduler:
         threading.Thread(target=scheduler_loop, args=(_stop,), name="scheduler", daemon=True).start()
         threading.Thread(target=ingest_scheduler_loop, args=(_stop,), name="ingest-scheduler", daemon=True).start()

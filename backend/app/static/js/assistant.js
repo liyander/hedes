@@ -2,7 +2,8 @@ import { $, api, esc, icon, md, badge, toast, ago, modal } from './lib.js';
 import { setDrawer } from './help.js';
 
 // Conversation state is shared by the floating drawer and the full AI Studio page, so a chat can move between them.
-const S = { threadId: sessionStorage.getItem('hedes-thread') || null, messages: [], tags: [], busy: false, status: null, threads: [] };
+const savedThread = () => { try { return sessionStorage.getItem('hedes-thread'); } catch (e) { return null; } };  // storage can be blocked
+const S = { threadId: savedThread() || null, messages: [], tags: [], busy: false, status: null, threads: [] };
 
 const TOOL_LABEL = {
   run_source: 'Run a data source now', test_source: 'Test a data source (fetch one page, store nothing)', set_source: 'Change a data source',

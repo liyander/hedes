@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from ..core.db import utcnow
@@ -265,6 +265,14 @@ def _trim(data: Any, limit: int = 6000) -> Any:
     return data if len(blob) <= limit else {"truncated": True, "preview": blob[:limit]}
 
 
+def _limit(args: dict, default: int = 10, most: int = 25) -> int:
+    """A tool's "limit" argument: the model may send "ten" or a negative number."""
+    try:
+        return max(1, min(int(args.get("limit") or default), most))
+    except (TypeError, ValueError):
+        return default
+
+
 def credential_status(db: Session, org_id: str, name: str) -> dict:
     c = integrations.connections_map(db, org_id).get(name) or {}
     return {"connected": c.get("status") == "active", "status": c.get("status") or "missing"}
@@ -317,7 +325,7 @@ def run_read_tool(db: Session, p: Principal, name: str, args: dict) -> Any:
         if args.get("q"):
             like = f"%{str(args['q'])[:60]}%"
             q = q.where(NormalizedEvent.action.ilike(like) | NormalizedEvent.actor.ilike(like) | NormalizedEvent.message.ilike(like))
-        rows = db.scalars(q.order_by(NormalizedEvent.timestamp.desc()).limit(min(int(args.get("limit") or 10), 25))).all()
+        rows = db.scalars(q.order_by(NormalizedEvent.timestamp.desc()).limit(_limit(args))).all()
         return [{"time": str(e.timestamp), "source": e.source, "severity": e.severity, "outcome": e.outcome, "actor": e.actor, "action": e.action, "target": e.target} for e in rows]
     if name == "list_dead_letters":
         q = select(DeadLetter).where(DeadLetter.organization_id == p.org_id)
@@ -355,7 +363,7 @@ def run_read_tool(db: Session, p: Principal, name: str, args: dict) -> Any:
         from .engine import ERROR_GUIDE
         return [{"execution_id": e.id, "time": str(e.created_at), "tool": e.tool_name, "error_class": e.error_class, "http_status": e.http_status,
                  "error": e.error[:300], "meaning": ERROR_GUIDE.get(e.error_class, ("", ""))[0], "fix": ERROR_GUIDE.get(e.error_class, ("", ""))[1]}
-                for e in db.scalars(q.order_by(Execution.created_at.desc()).limit(min(int(args.get("limit") or 10), 25))).all()]
+                for e in db.scalars(q.order_by(Execution.created_at.desc()).limit(_limit(args))).all()]
     if name in ("list_healing_cases", "get_healing_case"):
         from . import healing
         if name == "get_healing_case":
@@ -863,23 +871,35 @@ def _respond(db: Session, p: Principal, thread: AssistantThread, gw: Gateway, pa
     return msg
 
 
+def _claim(db: Session, act: AssistantAction, expected: str, new: str) -> None:
+    """Move the action from ``expected`` to ``new`` atomically and commit, so two approvals arriving together (a double
+    click in Slack, two tabs, two administrators) run it once: the second finds it already claimed."""
+    if not db.execute(update(AssistantAction).where(AssistantAction.id == act.id, AssistantAction.status == expected)
+                      .values(status=new, decided_at=utcnow())).rowcount:
+        db.rollback()
+        db.refresh(act)
+        raise HTTPException(409, f"This action was already {act.status}")
+    db.commit()
+    db.refresh(act)
+
+
 def decide(db: Session, p: Principal, act: AssistantAction, approve: bool) -> AssistantAction:
     """The requesting user's decision. An admin-only action approved by a non-admin is escalated to the administrators."""
     if act.status != "proposed":
         raise HTTPException(409, f"This action was already {act.status}")
-    act.decided_at = utcnow()
     if not approve:
-        act.status = "rejected"
+        _claim(db, act, "proposed", "rejected")
         audit.record(db, p.org_id, p, "assistant.reject", act.tool, action_id=act.id)
         db.commit()
         return act
     role = TOOLS[act.tool][1] if act.tool in TOOLS else "user"
     if RANK.get(p.role, 0) < RANK[role]:
-        act.status = "awaiting_admin"
+        _claim(db, act, "proposed", "awaiting_admin")
         audit.record(db, p.org_id, p, "assistant.escalate", act.tool, action_id=act.id, args=_trim(act.args, 800))
         audit.alert(db, p.org_id, "approval", f"{p.user.username} asks an administrator to run the assistant action '{act.tool}'", "info", None, "#/approvals")
         db.commit()
         return act
+    _claim(db, act, "proposed", "running")
     return _execute(db, p, act)
 
 
@@ -887,12 +907,13 @@ def admin_decide(db: Session, admin: Principal, act: AssistantAction, approve: b
     """Any administrator of the organisation runs (with their own permissions) or rejects an escalated action."""
     if act.status != "awaiting_admin":
         raise HTTPException(409, f"This action is {act.status}, not waiting for an administrator")
-    act.decided_at = utcnow()
     if approve:
+        _claim(db, act, "awaiting_admin", "running")
         act = _execute(db, admin, act)
         act.result = {**(act.result or {}), "approved_by": admin.user.username}
     else:
-        act.status, act.error = "rejected", f"Rejected by administrator {admin.user.username}" + (f": {comment.strip()[:300]}" if comment.strip() else "")
+        _claim(db, act, "awaiting_admin", "rejected")
+        act.error = f"Rejected by administrator {admin.user.username}" + (f": {comment.strip()[:300]}" if comment.strip() else "")
         audit.record(db, admin.org_id, admin, "assistant.admin_reject", act.tool, action_id=act.id, comment=comment[:300])
     db.add(AssistantMessage(thread_id=act.thread_id, role="assistant", meta={"admin_decision": act.id},
                             content=f"Administrator **{admin.user.username}** {'approved' if approve else 'rejected'} the action `{act.tool}`. Outcome: **{act.status}**."

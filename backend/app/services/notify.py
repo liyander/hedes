@@ -140,9 +140,13 @@ def _dispatch(alerts: list[dict]) -> None:
                     continue
                 key = f"{a['org_id']}|{a['message']}"
                 with _RECENT_LOCK:
-                    if time.monotonic() - _RECENT.get(key, -1e9) < DEDUPE_SECONDS:
+                    now = time.monotonic()
+                    if now - _RECENT.get(key, -1e9) < DEDUPE_SECONDS:
                         continue
-                    _RECENT[key] = time.monotonic()
+                    _RECENT[key] = now
+                    if len(_RECENT) > 5000:  # forget expired keys so the map does not grow for the life of the process
+                        for k in [k for k, t in _RECENT.items() if now - t > DEDUPE_SECONDS]:
+                            _RECENT.pop(k, None)
                 cfg = config_of(org)
                 res: dict[str, str] = {}
                 if cfg.get("enabled") and RANK.get(a["severity"], 0) >= RANK.get(cfg.get("min_severity", "high"), 3):
@@ -159,6 +163,9 @@ def _dispatch(alerts: list[dict]) -> None:
                 for channel, outcome in res.items():
                     if outcome != "sent":
                         log.warning("alert delivery via %s failed: %s", channel, outcome)
+                if res and "sent" not in res.values():
+                    with _RECENT_LOCK:
+                        _RECENT.pop(key, None)  # nothing got through: the next identical alert may try again
     except Exception:
         log.exception("alert delivery failed")
 

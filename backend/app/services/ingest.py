@@ -173,7 +173,7 @@ def _normalize_event(raw: dict, out: dict, spec: dict) -> tuple[dict | None, lis
     if outcome not in OUTCOMES:
         outcome = "unknown"
     event_id = _text(out["event_id"], 200) or "h:" + hashlib.sha256(json.dumps(raw, sort_keys=True, default=str).encode()).hexdigest()[:32]
-    return {"event_id": event_id, "timestamp": ts, "category": _map_value(spec, "category", _text(out["category"], 32)).lower(),
+    return {"event_id": event_id, "timestamp": ts, "category": _text(_map_value(spec, "category", _text(out["category"], 32)), 32).lower(),
             "action": action, "actor": _text(out["actor"]), "target": _text(out["target"]), "outcome": outcome,
             "severity": severity, "message": _text(out["message"], 1000)}, []
 
@@ -185,7 +185,9 @@ def _normalize_entity(raw: dict, out: dict, spec: dict, entity: str) -> tuple[di
     rec: dict[str, Any] = {"external_id": ident}
     reasons: list[str] = []
     for name in ENTITY_FIELDS[entity][1:]:
-        v = _text(_map_value(spec, name, _text(out[name], 255)), 255) if not _empty(out[name]) else ""
+        # cut to the column's length: PostgreSQL rejects longer strings (and the whole run with them); SQLite does not check
+        size = getattr(ENTITY_MODELS[entity].__table__.c[name].type, "length", None) or 255
+        v = _text(_map_value(spec, name, _text(out[name], size)), size) if not _empty(out[name]) else ""
         if name in ("last_login", "last_seen"):
             ts = parse_timestamp(out[name])
             if ts is None and v:
@@ -352,12 +354,28 @@ def run_source(db: Session, src: IngestSource, trigger: str = "schedule", transp
     integ, version, op = _config_for(db, src)
     spec = op["ingest"]
     entity = spec.get("entity") or "event"
-    config = version.config
     run = IngestRun(organization_id=src.organization_id, source_id=src.id, trigger=trigger, watermark_before=src.watermark, updated=0)
     db.add(run)
     src.state = "running"
     db.commit()
+    try:
+        return _run_pass(db, src, integ, version, spec, entity, run, transport)
+    except Exception as e:  # noqa: BLE001 - a bug or unexpected data must not leave the run "running" (or pause the source)
+        log.exception("ingestion run %s failed", run.id)
+        db.rollback()
+        run.status, run.error_class, run.error = "failed", "internal", f"{type(e).__name__}: {e}"[:2000]
+        run.finished_at = src.last_run_at = utcnow()
+        src.state, src.last_error_class, src.last_error = "failing", "internal", run.error
+        src.consecutive_failures += 1
+        src.next_run_at = _next_run(src)
+        db.commit()
+        return run
 
+
+def _run_pass(db: Session, src: IngestSource, integ: Integration, version: IntegrationVersion, spec: dict, entity: str,
+              run: IngestRun, transport) -> IngestRun:
+    config = version.config
+    started = run.started_at or utcnow()
     credential, conn = _credential(db, src.organization_id, config)
     auth_type = (config["integration"].get("authentication") or {}).get("type", "none")
     if auth_type != "none" and credential is None:
@@ -400,7 +418,8 @@ def run_source(db: Session, src: IngestSource, trigger: str = "schedule", transp
         if complete:
             run.status = "partial" if run.rejected else "succeeded"
             if newest:
-                src.watermark = newest.strftime("%Y-%m-%dT%H:%M:%S")
+                # never past the start of this run: one record stamped in the future (clock skew) would skip everything until then
+                src.watermark = min(newest, started).strftime("%Y-%m-%dT%H:%M:%S")
             src.last_success_at = utcnow()
             src.consecutive_failures = 0
             src.last_error, src.last_error_class = "", ""
@@ -555,9 +574,16 @@ def health(src: IngestSource, now: datetime | None = None) -> dict:
     if src.state == "failing":
         ctx = engine.ERROR_GUIDE.get(src.last_error_class, ("", ""))[0]
         return {"status": "failing", "reason": ctx or src.last_error[:120]}
-    stale_after = timedelta(minutes=src.interval_minutes * STALE_FACTOR)
+    every = timedelta(minutes=src.interval_minutes)
+    if src.cron and src.last_success_at:  # a cron source (daily, say) runs on its schedule, not every interval_minutes
+        try:
+            every = cron.next_after(src.cron, src.last_success_at) - src.last_success_at
+        except cron.CronError:
+            pass
+    stale_after = every * STALE_FACTOR
     if src.last_success_at and now - src.last_success_at > stale_after:
-        return {"status": "stale", "reason": f"No successful run for over {src.interval_minutes * STALE_FACTOR} minutes"}
+        mins = int(stale_after.total_seconds() // 60)
+        return {"status": "stale", "reason": f"No successful run for over {f'{mins // 60} hours' if mins >= 120 else f'{mins} minutes'}"}
     if src.state == "degraded":
         return {"status": "degraded", "reason": "A large share of records failed validation"}
     return {"status": "healthy", "reason": "Last run succeeded"}

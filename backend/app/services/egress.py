@@ -69,7 +69,10 @@ def check_url(url: str, allowed_domains: list[str] | None = None) -> None:
     host = host_of(url)
     if not domain_allowed(host, allowed_domains or []):
         raise EgressDenied(f"{host} is not in the organisation's allowed destinations")
-    port = urlsplit(url).port or 443
+    try:
+        port = urlsplit(url).port or 443
+    except ValueError:  # e.g. ":99999"
+        raise EgressDenied("The URL has an invalid port")
     try:
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror:

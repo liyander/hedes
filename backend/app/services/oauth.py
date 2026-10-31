@@ -235,7 +235,7 @@ def fresh_secret(db: Session, conn: Connection, secret: dict | None) -> dict | N
                 try:
                     app, client_secret = _app(own, c.organization_id, current["provider"])
                     body = _post_token(current["provider"], app, client_secret, {"grant_type": "refresh_token", "refresh_token": current["refresh_token"]})
-                except (OAuthError, httpx.HTTPError) as e:
+                except (OAuthError, httpx.HTTPError, egress.EgressDenied) as e:  # e.g. the token host does not resolve
                     log.warning("token refresh for %s failed: %s", c.name, e)
                     c.last_test_result = f"refresh failed: {str(e)[:170]}"
                     return secret

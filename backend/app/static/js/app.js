@@ -85,6 +85,7 @@ async function checkServer() {
   } catch (e) { /* offline: the next poll tries again */ }
 }
 window.addEventListener('hedes:stale', () => { const b = $('#stale-banner'); if (b) b.hidden = false; });
+window.addEventListener('hedes:signed-out', () => { state.user = null; clearInterval(counter); });
 
 async function refreshCounts() {
   if (!state.user) return;
@@ -146,7 +147,8 @@ let counter;
 
 export async function route() {
   if (state.cleanup) { try { state.cleanup(); } catch (e) { /* ignore */ } state.cleanup = null; }
-  const parts = (location.hash.replace(/^#\/?/, '') || 'dashboard').split('/').map(decodeURIComponent);
+  const decode = (s) => { try { return decodeURIComponent(s); } catch (e) { return s; } };  // a malformed link must not stop routing
+  const parts = (location.hash.replace(/^#\/?/, '') || 'dashboard').split('/').map(decode);
   const app = $('#app');
   if (parts[0] === 'invite') return (await import('./pages/login.js')).renderInvite(app, parts[1]);
   if (!state.user) {

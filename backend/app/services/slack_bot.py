@@ -160,6 +160,8 @@ def redeem_link_code(db: Session, org: Organization, code: str, slack_user: str)
     if not entry or entry[2] < time.time():
         return None
     user = db.get(User, entry[1])
+    if not user:  # the account was deleted after the code was made
+        return None
     cfg = config_of(org)
     cfg["links"] = {**(cfg.get("links") or {}), slack_user: user.id}
     save_config(db, org, cfg)

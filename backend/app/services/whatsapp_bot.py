@@ -77,6 +77,10 @@ def _sender(db: Session, org_id: str, phone: str) -> tuple[WhatsAppRecipient, Pr
 def _command(phone: str, message: dict) -> tuple[str, str]:
     """Returns (command id, free text)."""
     kind = message.get("type")
+    with _lock:
+        # A waiting "why reject?" prompt applies only to the very next message: after a tap on anything else, a later
+        # question for the AI must not become the reason for rejecting the request.
+        pending = _pending.pop(phone, None)
     if kind == "interactive":
         inter = message.get("interactive") or {}
         reply = inter.get("list_reply") or inter.get("button_reply") or {}
@@ -84,8 +88,6 @@ def _command(phone: str, message: dict) -> tuple[str, str]:
     if kind == "button":  # quick-reply button on a template
         return (message.get("button") or {}).get("payload") or "menu", ""
     text = ((message.get("text") or {}).get("body") or "").strip()
-    with _lock:
-        pending = _pending.pop(phone, None)
     if pending and pending["until"] > time.monotonic() and text.lower() != "cancel":
         return f"ap:reason:{pending['reject']}", text
     low = text.lower().strip(" !.")

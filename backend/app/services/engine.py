@@ -632,7 +632,7 @@ def preview(config: dict, op_id: str, inputs: dict) -> dict:
         return {"ok": False, "errors": problems}
     auth = config["integration"].get("authentication") or {"type": "none"}
     placeholder = {"token": "x", "api_key": "x", "username": "x", "password": "x", "client_id": "x", "client_secret": "x",
-                   "access_key_id": "x", "secret_access_key": "x"}
+                   "access_key_id": "x", "secret_access_key": "x", "access_token": "x"}
     apply_auth(req, auth, placeholder)
     out = {"ok": True, "request": redact(req, auth)}
     try:

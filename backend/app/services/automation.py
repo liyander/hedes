@@ -85,14 +85,23 @@ def _dispatch(events: list[tuple[str, str, dict]]) -> None:
                 for wf, v in active:
                     trig = ((v.graph if v else {}) or {}).get("trigger") or {}
                     for _, event, payload in (e for e in events if e[0] == org_id):
-                        if not matches(trig, event, payload) or per_wf.get(wf.id, 0) >= MAX_RUNS_PER_COMMIT:
+                        try:
+                            hit = matches(trig, event, payload)
+                        except Exception as e:  # noqa: BLE001 - one workflow's broken condition must not stop the others
+                            log.warning("workflow %s: its trigger conditions could not be evaluated: %s", wf.id, e)
+                            hit = False
+                        if not hit or per_wf.get(wf.id, 0) >= MAX_RUNS_PER_COMMIT:
                             continue
                         if _first_seen(f"{wf.id}|{event}|{json.dumps(payload, sort_keys=True)}"):
                             per_wf[wf.id] = per_wf.get(wf.id, 0) + 1
                             todo.append((wf.id, {**payload, "event": event}))
             for wf_id, payload in todo:  # one after another: a burst of records must not open hundreds of threads
                 try:
-                    workflows.execute(db, db.get(Workflow, wf_id), "automatic", payload)
+                    wf = db.get(Workflow, wf_id)
+                    db.refresh(wf)
+                    if wf.status != "active":
+                        continue  # paused while earlier runs of this batch were going
+                    workflows.execute(db, wf, "automatic", payload)
                 except Exception as e:  # noqa: BLE001 - an invalid workflow must not stop the others
                     db.rollback()
                     log.warning("automatic run of workflow %s failed to start: %s", wf_id, e)

@@ -74,11 +74,10 @@ integration:
           actor: "$.userPrincipalName"
           action: "$.appDisplayName"
           target: "$.ipAddress"
-          outcome: "$.status.errorCode"
+          outcome: {path: "$.status.errorCode", transform: thresholds, thresholds: [[1, failure], [0, success]]}  # 0 = signed in, any other code = a failure
           severity: {path: "$.riskLevelAggregated", default: info}
           message: "$.status.failureReason"
         value_maps:
-          outcome: {"0": success}
           severity: {none: info, hidden: info, unknownFutureValue: info, low: low, medium: medium, high: high}
         schedule: {interval_minutes: 15}
     - id: list_security_alerts

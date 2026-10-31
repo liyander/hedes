@@ -1,6 +1,7 @@
 """Maintenance commands.
 
     python -m app.maintenance purge-demo     back up the database, then remove demo / mock data
+                                             (PostgreSQL: back it up yourself, then add --without-backup)
 
 ``purge-demo`` removes integrations that call the bundled mock APIs (``/mock/``) or that are untouched platform seeds
 (every version has source ``seed``), together with everything that hangs off them: versions, tools, approvals, tests,
@@ -12,24 +13,27 @@ from __future__ import annotations
 
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from .core.config import get_settings
-from .core.db import engine, init_db, session_scope
+from .core.db import engine, init_db, session_scope, utcnow
 from .models import (Alert, ApprovalEvent, ApprovalRequest, Connection, DeadLetter, Execution, IngestRun, IngestSource,
                      Integration, IntegrationVersion, NormalizedDevice, NormalizedEvent, NormalizedUser, RepairProposal,
                      TestRun, Tool, Workflow, WorkflowRun, WorkflowStep, WorkflowVersion)
 from .services import audit, vault
 
 
-def _is_demo(versions: list[IntegrationVersion]) -> bool:
+def _is_demo(integ: Integration, versions: list[IntegrationVersion]) -> bool:
+    """An untouched platform seed, or an integration whose current configuration (the published one, else the latest) still
+    calls the bundled mock APIs. One built against a mock and later pointed at a real API is real work and is kept."""
     if versions and all(v.source == "seed" for v in versions):
         return True
-    return any("/mock/" in str(v.config.get("integration", {}).get("base_url", "")) for v in versions)
+    current = next((v for v in versions if v.id == (integ.published_version_id or integ.latest_version_id)), None)
+    return current is not None and "/mock/" in str(current.config.get("integration", {}).get("base_url", ""))
 
 
 def purge_demo_data(db: Session) -> dict:
@@ -37,7 +41,7 @@ def purge_demo_data(db: Session) -> dict:
     by_integ: dict[str, list[IntegrationVersion]] = {}
     for v in db.scalars(select(IntegrationVersion)).all():
         by_integ.setdefault(v.integration_id, []).append(v)
-    demo = [i for i in integs if _is_demo(by_integ.get(i.id, []))]
+    demo = [i for i in integs if _is_demo(i, by_integ.get(i.id, []))]
     if not demo:
         return {"integrations": [], "credentials": [], "workflows": 0, "events": 0}
     ids = [i.id for i in demo]
@@ -86,6 +90,17 @@ def purge_demo_data(db: Session) -> dict:
     return summary
 
 
+def close_interrupted_runs(db: Session, older_than: timedelta = timedelta(hours=1)) -> int:
+    """Runs still marked running long after they started were cut off by a restart: mark them failed so they stop showing
+    as running for ever. Only old ones - another server sharing the database may be running recent ones right now."""
+    cutoff, n = utcnow() - older_than, 0
+    for model in (IngestRun, WorkflowRun):
+        for run in db.scalars(select(model).where(model.status == "running", model.started_at < cutoff)).all():
+            run.status, run.error, run.finished_at = "failed", "Interrupted: the server stopped during this run", utcnow()
+            n += 1
+    return n
+
+
 def backup_sqlite() -> Path | None:
     """Consistent copy of the SQLite database (safe while the server is running). None for other databases."""
     url = get_settings().database_url
@@ -109,6 +124,10 @@ def main(argv: list[str]) -> int:
     backup = backup_sqlite()
     if backup:
         print(f"Backup written to {backup}")
+    elif "--without-backup" not in argv[1:]:
+        print("This database is not SQLite, so no backup can be made here. Back it up first (pg_dump, or a Neon branch),\n"
+              "then run again with:  python -m app.maintenance purge-demo --without-backup")
+        return 1
     with session_scope() as db:
         summary = purge_demo_data(db)
     engine.dispose()

@@ -334,9 +334,12 @@ def deliver(db: Session, org: Organization, alert: dict) -> dict[str, str]:
         return {}
     results = {}
     title = f"H.A.D.E.S {alert['severity'].upper()}: {alert['kind']}"
-    for rec in _targets(db, org.id, alert):
+    targets = _targets(db, org.id, alert)
+    links = {rec.id: issue_link(db, org.id, rec.user_id, alert) for rec in targets}
+    db.commit()  # saved before sending: a link must open the moment its message arrives (and no write lock is held while sending)
+    for rec in targets:
         try:
-            send_alert(db, org, rec.phone, title, alert["message"], issue_link(db, org.id, rec.user_id, alert))
+            send_alert(db, org, rec.phone, title, alert["message"], links[rec.id])
             results[mask_phone(rec.phone)] = "sent"
         except Exception as e:  # noqa: BLE001 - one bad number must not stop the others
             results[mask_phone(rec.phone)] = f"{type(e).__name__}: {str(e)[:200]}"
