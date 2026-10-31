@@ -17,6 +17,12 @@ Monitoring detects failures and drift and prepares repairs, which go back throug
 
 ## Quick start
 
+**Windows:** double-click `run.bat` (or `run.bat 9000` for another port, `run.bat test` to run the tests). On first run it
+creates `backend\.venv`, installs dependencies, copies `.env.example` to `.env`, starts the server and opens the browser.
+Python 3.10+ is the only prerequisite.
+
+**Manually:**
+
 ```bash
 cd backend
 pip install -r requirements.txt
@@ -108,4 +114,5 @@ Interactive API docs: http://127.0.0.1:8000/docs.
 - **DNS rebinding**: destinations are resolved and checked before each request, but the connection is not pinned to the
   checked IP; run the app behind an egress proxy/firewall in production.
 
-See `docs/ARCHITECTURE.md` for the data model, trust boundaries and the configuration format.
+See **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** for a full explanation of every feature and the three roles, and
+`docs/ARCHITECTURE.md` for the data model, trust boundaries and the configuration format.
