@@ -380,7 +380,7 @@ def test_builder_can_run_but_not_govern_sources(server, builder):
 def test_stale_running_state_from_a_crash_does_not_block_the_source(server, admin):
     from app.core.db import session_scope, utcnow
     from app.models import IngestSource
-    sid = _sources(admin)["okta"]["id"]
+    sid = _sources(admin)["demo-okta"]["id"]
     with session_scope() as db:
         src = db.get(IngestSource, sid)
         src.state, src.next_run_at = "running", utcnow() - timedelta(minutes=1)  # as left by a process killed mid-run
