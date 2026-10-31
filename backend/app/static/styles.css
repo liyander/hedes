@@ -498,3 +498,6 @@ h4.small.muted { margin: 14px 0 4px; letter-spacing: .04em; font-weight: 600; }
 .row > .spacer { flex: 1; }
 .fix-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
 .fix-actions .btn { justify-content: center; min-height: 42px; }
+
+.stale-banner { display: flex; gap: 10px; align-items: flex-start; padding: 9px 20px; background: var(--warn-soft); border-bottom: 1px solid var(--warn-line); color: var(--text); font-size: 13.5px; }
+.stale-banner[hidden] { display: none; }

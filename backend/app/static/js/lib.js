@@ -22,6 +22,11 @@ export async function api(path, { method = 'GET', body } = {}) {
     let msg = data && data.detail;
     if (Array.isArray(msg)) msg = msg.map((d) => `${(d.loc || []).slice(1).join('.')}: ${d.msg}`).join('; ');
     if (res.status === 401 && path !== '/auth/login' && path !== '/auth/me') { location.hash = '#/login'; }
+    if (res.status === 404 && msg === 'Not Found') {
+      // FastAPI's answer for a route that does not exist: the page is newer than the running server.
+      msg = 'This action is not available on the running server - it is older than this page. Restart H.E.D.E.S (close its window and run run.bat again), then try again.';
+      window.dispatchEvent(new CustomEvent('hedes:stale'));
+    }
     throw new ApiError(res.status, msg || `Request failed (${res.status})`);
   }
   return data;

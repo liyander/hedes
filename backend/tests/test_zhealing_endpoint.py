@@ -113,3 +113,34 @@ def test_assistant_fix_integration_action(server):
         owner.delete(f"/api/v1/ai/providers/{prov['id']}")
         admin.post(f"/api/v1/integrations/{integ_id}/rollback", json={"version_id": good})
         stub.srv.shutdown()
+
+
+def test_api_error_in_a_200_response_is_blamed_on_the_data_not_the_endpoint(server, monkeypatch):
+    called = []
+    monkeypatch.setattr(healing, "endpoint_exists", lambda *a, **k: called.append(1) or (True, "x"))
+    admin = login(server, "admin")
+    org_id = admin.get("/api/v1/auth/me").json()["organization"]["id"]
+    from app.models import Execution, HealingCase
+    with session_scope() as db:
+        integ = db.query(Integration).filter_by(organization_id=org_id, slug="notify").one()
+        ex = Execution(organization_id=org_id, integration_id=integ.id, tool_name="notify.send_message", status="failed", error_class="not_found",
+                       http_status=200, error="HTTP 200 but the API reported a failure: channel_not_found", actor_type="workflow",
+                       request_preview={"method": "POST", "url": "https://slack.com/api/chat.postMessage"})
+        db.add(ex)
+        db.flush()
+        case = HealingCase(organization_id=org_id, integration_id=integ.id, execution_id=ex.id, target=ex.tool_name, error_class="not_found",
+                           endpoint=healing._endpoint(ex), log=[], runs=0)
+        db.add(case)
+        db.flush()
+        healing.investigate(db, case)
+        assert "endpoint is correct" in case.root_cause and "channel_not_found" in case.root_cause
+        assert not called and any("invite the app" in r for r in case.required)
+
+
+def test_health_reports_a_server_running_older_code(server, monkeypatch):
+    import httpx
+
+    from app import main
+    assert httpx.get(server + "/api/v1/health").json()["stale"] is False
+    monkeypatch.setattr(main, "code_version", lambda: "newer")
+    assert httpx.get(server + "/api/v1/health").json()["stale"] is True

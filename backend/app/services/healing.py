@@ -512,6 +512,17 @@ def investigate(db: Session, case: HealingCase) -> None:
         if case.status != "awaiting_approval":
             case.required = ["Check what the API now returns (Monitoring > the failed execution > observed response structure) and update the "
                              "output mapping in a new revision."]
+    elif cls in ENDPOINT and 200 <= int(case.endpoint.get("http_status") or (ex.http_status if ex else 0) or 0) < 300:
+        # The endpoint answered (HTTP 2xx) but the API reported an error in its body (Slack's {"ok": false, "error": ...}):
+        # the URL is right, the request's data is not. Looking for a different endpoint would be wrong.
+        reported = (ex.error if ex else case.evidence.get("error", ""))[:300]
+        case.root_cause = (f"The endpoint is correct (it answered HTTP {case.endpoint.get('http_status') or 200}), but the API rejected the request data: "
+                           f"{reported}.")
+        _try(case, "Checked whether the endpoint itself is at fault", "No - it answered successfully and reported an error about the request's content.", True)
+        where = case.evidence.get("workflow")
+        case.required = [f"Check the values sent{' by ' + where if where else ''} - for example that the channel, user or record exists and that the "
+                         "integration's account has access to it (Slack: invite the app to the channel) - then run it again.",
+                         "When it works again, press Mark as fixed, or Investigate again to confirm."]
     elif cls in ENDPOINT:
         case.root_cause = f"{meaning} Request: {case.endpoint.get('method', '')} {case.endpoint.get('url', '')}."
         if op_id and _fix_endpoint(db, case, integ, live, op_id):
