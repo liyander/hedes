@@ -2,8 +2,9 @@ import { $, api, esc, icon, badge, agoCell, pageHead, modal, toast, confirmBox, 
 import { state, isAdmin, isOwner, route } from '../app.js';
 
 export async function render({ el }) {
-  const [org, tokens, demo, notif, tpl] = await Promise.all([api('/organizations/current'), api('/tokens'), api('/demo/state'),
-    isAdmin() ? api('/settings/notifications') : Promise.resolve(null), isAdmin() ? api('/settings/notifications/templates') : Promise.resolve(null)]);
+  const [org, tokens, demo, notif, tpl, wa, myWa] = await Promise.all([api('/organizations/current'), api('/tokens'), api('/demo/state'),
+    ...(isAdmin() ? [api('/settings/notifications'), api('/settings/notifications/templates'), api('/settings/whatsapp'), api('/me/whatsapp')]
+      : [null, null, null, null])]);
   const p = org.policy || {};
   const admin = isAdmin();
   const origin = location.origin;
@@ -39,6 +40,7 @@ export async function render({ el }) {
     </div>
     ${notif ? notificationsCard(notif) : ''}
     ${tpl ? templatesCard(tpl) : ''}
+    ${wa ? `<div class="split even">${whatsappCard(wa)}${myWhatsappCard(myWa)}</div>` : ''}
     <div class="card"><div class="card-head"><h2>Members</h2><span class="spacer"></span>${admin ? `<button class="btn sm" id="invite">${icon('plus', 13)} Invite</button>` : ''}</div>
       <div class="table-scroll"><table><thead><tr><th>User</th><th>Email</th><th>Role</th></tr></thead><tbody>
       ${org.members.map((m) => `<tr><td><b>${esc(m.name || m.username)}</b> <span class="muted mono small">${esc(m.username)}</span></td><td>${esc(m.email)}</td>
@@ -86,6 +88,7 @@ export async function render({ el }) {
     e.target.disabled = false;
   });
   if (tpl) wireTemplates(el);
+  bindWhatsapp(el);
   $('#drift', el)?.addEventListener('click', async () => { await api('/demo/drift', { method: 'POST', body: { enabled: !demo.drift } }); route(); });
   $('#new-token', el).addEventListener('click', async () => {
     const r = await modal({ title: 'New API token', body: '<div class="field"><label>Name</label><input type="text" name="name" placeholder="e.g. Claude Desktop" required></div>',
@@ -230,5 +233,98 @@ function wireTemplates(el) {
       toast(Object.entries(r.results).map(([k, v]) => `${k}: ${v}`).join(' · ') + (dirty().includes(d) ? ' (sent the saved version - save first to test your edits)' : ''), r.ok ? 'ok' : 'bad');
     } catch (err) { toast(err.message, 'bad'); }
     b.disabled = false;
+  });
+}
+
+function whatsappCard(w) {
+  return `<div class="card"><div class="card-head"><h2>WhatsApp</h2><span class="muted small">Meta WhatsApp Cloud API · token stored encrypted</span></div><div class="card-body" id="wa">
+    <p class="small muted" style="margin-top:0">Sends alerts to each administrator who adds their own number (right), with a one-tap <b>fix link</b>: approve a repair,
+      retry or pause a source, acknowledge or mute. ${w.recipients} verified recipient${w.recipients === 1 ? '' : 's'}.</p>
+    <label class="check" style="margin-bottom:12px"><input type="checkbox" name="enabled" ${w.enabled ? 'checked' : ''}> Send alerts to WhatsApp</label>
+    <div class="grid-2"><div class="field"><label>Phone number ID</label><input type="text" name="phone_number_id" value="${esc(w.phone_number_id)}" inputmode="numeric" placeholder="e.g. 106540352242922"></div>
+      <div class="field"><label>Graph API version</label><input type="text" name="api_version" value="${esc(w.api_version)}"></div></div>
+    <div class="field"><label>Access token</label><input type="password" name="access_token" autocomplete="new-password" placeholder="${w.token_hint ? `saved ${esc(w.token_hint)} — leave blank to keep` : 'System User permanent token'}">
+      <div class="hint">Meta Business Settings → System users → generate a token with <span class="mono">whatsapp_business_messaging</span>. The phone number ID is in WhatsApp Manager → API Setup.</div></div>
+    <div class="grid-2"><div class="field"><label>Alert template (optional)</label><input type="text" name="alert_template" value="${esc(w.alert_template)}" placeholder="hedes_alert"></div>
+      <div class="field"><label>Template language</label><input type="text" name="template_lang" value="${esc(w.template_lang)}" placeholder="en"></div></div>
+    <label class="check small"><input type="checkbox" name="template_has_button" ${w.template_has_button ? 'checked' : ''}> The template has a “Fix it” URL button</label>
+    <div class="field" style="margin-top:10px"><label>Verification-code template (optional)</label><input type="text" name="otp_template" value="${esc(w.otp_template)}" placeholder="hedes_code (Authentication category)"></div>
+    <details class="small"><summary>How to set up the templates</summary>
+      <p>Without a template, WhatsApp delivers plain text only within 24 hours of the recipient messaging your business number (fine for testing: send it “hi” first).
+        For reliable alerts create a <b>Utility</b> template with body <span class="mono">{{1}} — {{2}} Fix it: {{3}}</span>.
+        Optionally add a URL button whose URL is <span class="mono">${esc(w.fix_url_prefix)}{{1}}</span> and tick the box above.
+        For codes, create an <b>Authentication</b> template with a copy-code button.</p></details>
+    <div class="row between"><span class="small muted">${w.display_phone ? `Business number: <b>${esc(w.display_phone)}</b>${w.verified_name ? ` (${esc(w.verified_name)})` : ''}` : ''}</span>
+      <div class="row">${w.configured ? '<button class="btn" id="check-wa">Check connection</button>' : ''}<button class="btn primary" id="save-wa">Save</button></div></div></div></div>`;
+}
+
+function myWhatsappCard(m) {
+  const sev = (cur) => ['info', 'low', 'medium', 'high', 'critical'].map((s) => `<option ${cur === s ? 'selected' : ''}>${s}</option>`).join('');
+  let inner;
+  if (!m.org_ready) inner = '<p class="muted small">Set up WhatsApp for the organisation first.</p>';
+  else if (!m.verified) {
+    const biz = (m.business_phone || '').replace(/\D/g, '');
+    inner = `${m.has_template ? '' : `<div class="callout warn small" style="margin-bottom:12px"><b>First, message the business number from your WhatsApp.</b>
+        No message template is set, so the code is sent as plain text. WhatsApp only delivers that within 24 hours of you messaging the business number,
+        otherwise Meta accepts it and silently drops it.
+        ${biz ? `<div style="margin-top:6px"><a class="btn sm" href="https://wa.me/${biz}?text=hi" target="_blank" rel="noopener">Open chat with +${esc(biz)}</a> send “hi”, then press Send code.</div>`
+          : '<div style="margin-top:6px">Press <b>Check connection</b> in the WhatsApp card to look up the business number.</div>'}</div>`}
+      <div class="field"><label>Your WhatsApp number</label><div class="row"><input type="tel" name="phone" placeholder="+44 7700 900123" autocomplete="tel">
+        <button class="btn" id="wa-code">${m.code_pending ? 'Resend code' : 'Send code'}</button></div><div class="hint">International format with country code. We send a 6-digit code to confirm it is yours.</div></div>
+      ${m.code_pending ? `<div class="field"><label>Code sent to ${esc(m.phone)}</label><div class="row"><input type="text" name="code" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code"><button class="btn primary" id="wa-verify">Verify</button></div></div>` : ''}`;
+  } else {
+    inner = `<div class="row between"><div><b>${esc(m.phone)}</b> ${badge('ok', 'verified')}</div><button class="btn sm danger" id="wa-remove">Remove</button></div>
+      <label class="check" style="margin-top:12px"><input type="checkbox" name="me_enabled" ${m.enabled ? 'checked' : ''}> Send me alerts on WhatsApp</label>
+      <div class="row" style="margin-top:8px"><label class="small" style="margin:0">Minimum severity</label><select name="me_min" style="width:auto">${sev(m.min_severity)}</select></div>
+      <label class="check" style="margin-top:8px"><input type="checkbox" name="me_approvals" ${m.approvals ? 'checked' : ''}> Also every pending approval and repair, whatever its severity</label>
+      ${m.org_enabled ? '' : '<div class="callout warn small" style="margin-top:10px">WhatsApp is turned off for the organisation, so nothing is sent yet.</div>'}
+      <div class="row end"><button class="btn" id="wa-test">Send test</button><button class="btn primary" id="wa-prefs">Save</button></div>`;
+  }
+  return `<div class="card"><div class="card-head"><h2>My WhatsApp alerts</h2><span class="muted small">only you receive these</span></div><div class="card-body" id="mywa">${inner}</div></div>`;
+}
+
+function bindWhatsapp(el) {
+  const f = (n) => $(`[name=${n}]`, el);
+  const call = async (btn, fn) => {
+    btn.disabled = true;
+    try { await fn(); } catch (err) { toast(err.message, 'bad'); }
+    btn.disabled = false;
+  };
+  $('#save-wa', el)?.addEventListener('click', (e) => call(e.target, async () => {
+    const d = formData($('#wa', el));
+    const body = { ...d, phone_number_id: d.phone_number_id.trim(), alert_template: d.alert_template.trim(), otp_template: d.otp_template.trim(), template_lang: d.template_lang.trim() || 'en' };
+    if (!d.access_token) delete body.access_token;
+    const r = await api('/settings/whatsapp', { method: 'PUT', body });
+    if (r.check_error) toast(`Saved, but the connection check failed: ${r.check_error}`, 'bad');
+    else toast(r.display_phone ? `WhatsApp saved · connected to ${r.display_phone}` : 'WhatsApp saved', 'ok');
+    route();
+  }));
+  $('#check-wa', el)?.addEventListener('click', (e) => call(e.target, async () => {
+    const r = await api('/settings/whatsapp/check', { method: 'POST' });
+    toast(`Connected: ${r.verified_name || 'business number'} ${r.display_phone}${r.quality_rating ? ` · quality ${r.quality_rating}` : ''}`, 'ok');
+    route();
+  }));
+  $('#wa-code', el)?.addEventListener('click', (e) => call(e.target, async () => {
+    const r = await api('/me/whatsapp/code', { method: 'POST', body: { phone: f('phone').value } });
+    toast(r.sent_via === 'text' ? 'Meta accepted the code. If it does not arrive within a minute, message the business number first, then resend.' : 'Code sent — check WhatsApp', 'ok');
+    route();
+  }));
+  $('#wa-verify', el)?.addEventListener('click', (e) => call(e.target, async () => {
+    await api('/me/whatsapp/verify', { method: 'POST', body: { code: f('code').value } });
+    toast('Number verified', 'ok');
+    route();
+  }));
+  $('#wa-prefs', el)?.addEventListener('click', (e) => call(e.target, async () => {
+    await api('/me/whatsapp', { method: 'PATCH', body: { enabled: f('me_enabled').checked, min_severity: f('me_min').value, approvals: f('me_approvals').checked } });
+    toast('Saved', 'ok');
+  }));
+  $('#wa-test', el)?.addEventListener('click', (e) => call(e.target, async () => {
+    await api('/me/whatsapp/test', { method: 'POST' });
+    toast('Test sent to your WhatsApp', 'ok');
+  }));
+  $('#wa-remove', el)?.addEventListener('click', async () => {
+    if (!await confirmBox('Remove your number', 'You will stop getting WhatsApp alerts.', 'Remove', 'danger-solid')) return;
+    await api('/me/whatsapp', { method: 'DELETE' });
+    route();
   });
 }

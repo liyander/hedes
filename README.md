@@ -74,7 +74,9 @@ Only the CISA feed is verified end to end against the live internet by the test 
 are validated and exercised with the engine's request/response tests.
 
 **Alerts** can be pushed to Slack (incoming webhook) and/or email (SMTP) from *Settings → Alert delivery*; a source
-that fails N runs in a row (default 3) raises one.
+that fails N runs in a row (default 3) raises one. **WhatsApp** (Meta Cloud API) sends alerts to each admin's own verified number
+with a one-tap **fix link**: approve or reject a repair, retry/pause/resume a source, acknowledge or mute, signed in with your own
+account and audited (see the User Guide, section 17.1).
 
 ## AI assistant
 

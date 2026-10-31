@@ -599,3 +599,37 @@ class HealingCase(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = created()
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class WhatsAppRecipient(Base):
+    """An administrator's own WhatsApp number for alerts, verified with a one-time code before anything is sent to it."""
+    __tablename__ = "whatsapp_recipients"
+    __table_args__ = (UniqueConstraint("user_id", "organization_id"),)
+    id: Mapped[str] = pk()
+    user_id: Mapped[str] = fk("users.id")
+    organization_id: Mapped[str] = fk("organizations.id")
+    phone: Mapped[str] = mapped_column(String(20))  # E.164 digits without the "+"
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    min_severity: Mapped[str] = mapped_column(String(16), default="high")
+    approvals: Mapped[bool] = mapped_column(Boolean, default=True)  # also pending approvals and repairs, whatever their severity
+    code_hash: Mapped[str] = mapped_column(String(64), default="")
+    code_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    code_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    code_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = created()
+
+
+class FixLink(Base):
+    """A one-tap link sent with a WhatsApp alert. Bound to its recipient; every action still needs that person's session."""
+    __tablename__ = "fix_links"
+    id: Mapped[str] = pk()
+    organization_id: Mapped[str] = fk("organizations.id")
+    user_id: Mapped[str] = fk("users.id")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    alert_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # None = test link
+    integration_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    approval_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = created()

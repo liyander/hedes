@@ -39,7 +39,9 @@ export async function renderLogin(app) {
     $('#err').textContent = '';
     try {
       state.user = await api('/auth/login', { method: 'POST', body: { username: $('#u').value, password: $('#pw').value } });
-      go('#/dashboard');
+      let back = '';
+      try { back = sessionStorage.getItem('integra-return') || ''; sessionStorage.removeItem('integra-return'); } catch (e) { /* ignore */ }
+      go(back.startsWith('#/fix/') ? back : '#/dashboard');
     } catch (err) {
       $('#err').textContent = err.message;
       btn.disabled = false;

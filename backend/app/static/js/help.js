@@ -56,5 +56,6 @@ export function toggleHelp(page) {
 export function syncHelpPage(page) {
   const d = document.getElementById('help-drawer');
   if (d && !d.hidden) showHelp(page);       // keep an open guide in step with navigation
-  else showHelp(page, { auto: true });      // first visit to a page: open it once, then never again unless asked
+  else if (page !== 'fix') showHelp(page, { auto: true });  // first visit to a page: open it once, then never again unless asked
+                                            // (not on Fix: it is opened from WhatsApp, usually on a phone, and the guide would cover it)
 }

@@ -582,6 +582,42 @@ The Monitoring page refreshes every 15 seconds:
 | `approval` | A version was submitted for review | info |
 | `repair` | A repair is ready for review, or no safe repair was found | medium / high |
 
+### 17.1 WhatsApp alerts and one-tap fixes
+
+Administrators can get alerts on WhatsApp (Meta WhatsApp Cloud API), each with a **fix link** that opens a Fix page for that
+alert with the actions that apply:
+
+| Action | When it is offered | Role |
+| --- | --- | --- |
+| **Approve fix & publish** / **Reject** | A repair or new version for the integration is waiting for review (disabled while any approval blocker is listed) | admin |
+| **Retry now** | The integration has a data source that is not paused (a successful retry also acknowledges the alert) | admin |
+| **Pause** / **Resume** | The integration has a data source | admin |
+| **Reconnect credential** | Credential alerts (`auth_invalid`, `forbidden`, `credential_missing`, `credential`) | admin |
+| **Acknowledge** | The alert is unread | admin |
+| **Mute 1 h / 24 h** / **Unmute** | The alert is about an integration: Slack, email and WhatsApp alerts for it stop for that time (they still appear in the app) | admin |
+
+Setup:
+
+1. *Settings → WhatsApp* (admin): enter the **phone number ID** (WhatsApp Manager → API Setup) and a **System User access token**
+   with `whatsapp_business_messaging`, tick *Send alerts to WhatsApp* and save. The token goes to the vault. Saving (or
+   **Check connection**) looks up the business number, which proves the ID and token work.
+   Note: Meta answering "accepted" does not mean delivered. A plain-text message outside the 24-hour window is accepted and then
+   silently dropped, so without a template, send "hi" to the business number (the card shows an *Open chat* button) before
+   asking for a code. With an alert template set, codes are sent through it.
+2. *Settings → My WhatsApp alerts* (each admin): enter your number in international format, press **Send code**, type the 6-digit code.
+   Choose your minimum severity and whether to also get **every pending approval and repair**, whatever its severity. **Send test** sends
+   a message with a test fix link.
+3. For reliable delivery create message templates in WhatsApp Manager. Without one, WhatsApp only delivers plain text within 24 hours
+   of the recipient messaging the business number:
+   - *Alert template* (Utility): body with three variables, e.g. `{{1}} — {{2}} Fix it: {{3}}` (title, details, fix link). Optionally add a
+     URL button with the URL `<PUBLIC_BASE_URL>/fix/{{1}}` and tick *The template has a “Fix it” URL button*.
+   - *Verification-code template* (Authentication) with a copy-code button.
+
+Safety: a fix link (`/fix/<token>`) is random, stored only as a hash, valid for 24 hours and bound to the person it was sent to. It only
+says which alert to show: every action needs that person signed in with their own account and role, uses the same hash-bound approval
+as *Approvals*, and is audited as `fix.<action>` with `via: whatsapp-fix-link`. A forwarded link does nothing for anyone else.
+`PUBLIC_BASE_URL` must be the address your phone can reach (put the app behind HTTPS for real use).
+
 ---
 
 ## 18. Self-healing (repair proposals)
@@ -680,6 +716,8 @@ without any API key.
   - *Monthly AI budget (USD)* — default 25. When reached, only free models are used.
   - *Auto-repair after N drift failures* — default 2.
   - *Require passing safe tests before review* — default on; **owner only**.
+- **Alert delivery** (admins) — Slack webhook and/or SMTP email with a minimum severity, and **WhatsApp** (organisation setup plus
+  each admin's own verified number; see [17.1](#171-whatsapp-alerts-and-one-tap-fixes)).
 - **API & MCP access** — create personal API tokens (shown once, `iat_…`), see when each was last used, revoke them. Includes a
   ready-made MCP client configuration.
 - **Members** — list of members and pending invitations. Admins invite and change roles (builder ↔ admin); owners can also grant
@@ -811,6 +849,8 @@ All endpoints are under `/api/v1`. Interactive documentation is at `/docs`.
 | Tools & executions | `GET /tools`, `GET /admin/tools`, `GET /tools/{id}/schema`, `PATCH /admin/tools/{id}`, `POST /tools/{id}/execute`, `GET /executions`, `GET /executions/{id}`, `/logs`, `POST /executions/{id}/explain`, `/repair` |
 | Monitoring | `GET /monitoring/metrics?hours=`, `GET /monitoring/failures`, `GET /repairs`, `GET /alerts`, `POST /alerts/{id}/ack`, `POST /alerts/ack-all`, `GET /audit?action=` |
 | Workflows | `GET/POST /workflows`, `POST /workflows/plan`, `GET/PUT/DELETE /workflows/{id}`, `POST /workflows/{id}/validate`, `/activate`, `/stop`, `/execute`, `GET /workflows/{id}/runs`, `POST /hooks/{id}` (signed webhook) |
+| Alert delivery | `GET/PUT /settings/notifications`, `POST /settings/notifications/test`, `GET/PUT /settings/whatsapp`, `GET/PATCH/DELETE /me/whatsapp`, `POST /me/whatsapp/code`, `/verify`, `/test` |
+| Fix links | `GET /fix/{token}`, `POST /fix/{token}/{approve,reject,retry,pause,resume,ack,mute,unmute}`; `GET /fix/{token}` outside `/api/v1` redirects into the app |
 | Demo | `GET /demo/state`, `POST /demo/drift` |
 | MCP | `POST /mcp` (outside `/api/v1`) |
 

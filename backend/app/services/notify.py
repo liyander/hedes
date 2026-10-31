@@ -1,8 +1,10 @@
-"""Outbound alert delivery: Slack incoming webhook and/or SMTP email, configured per organisation in Settings.
+"""Outbound alert delivery: Slack incoming webhook, SMTP email and WhatsApp, configured per organisation in Settings.
 
 Alerts are always shown in the app. When channels are enabled they are also pushed out, once the transaction that
 raised them has committed, from a background thread (a slow mail server must never block a request or an ingestion run).
-Secrets (webhook URL, SMTP password) live in the credential vault.
+Secrets (webhook URL, SMTP password, WhatsApp token) live in the credential vault. WhatsApp goes to each opted-in
+administrator's own number with a fix link and has its own thresholds (see services/whatsapp.py). Integrations muted from a
+fix link are skipped on every outbound channel for the mute period; their alerts still appear in the app.
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ from sqlalchemy.orm import Session
 from ..core.config import get_settings
 from ..core.db import session_scope
 from ..models import Organization
-from . import egress, email_templates, vault
+from . import egress, email_templates, vault, whatsapp
 
 log = logging.getLogger("integra.notify")
 RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -134,19 +136,23 @@ def _dispatch(alerts: list[dict]) -> None:
         with session_scope() as db:
             for a in alerts:
                 org = db.get(Organization, a["org_id"])
-                cfg = config_of(org)
-                if not cfg.get("enabled") or RANK.get(a["severity"], 0) < RANK.get(cfg.get("min_severity", "high"), 3):
+                if not org or whatsapp.mute_until(org, a.get("integration_id")):
                     continue
                 key = f"{a['org_id']}|{a['message']}"
                 with _RECENT_LOCK:
                     if time.monotonic() - _RECENT.get(key, -1e9) < DEDUPE_SECONDS:
                         continue
                     _RECENT[key] = time.monotonic()
-                base = get_settings().public_base_url.rstrip("/")
-                link = f"{base}/{a['link']}" if a.get("link") else base
-                mail = email_templates.render(email_templates.template_for(a["kind"]), kind=a["kind"], severity=a["severity"], message=a["message"],
-                                              organization=org.name, link=link, overrides=cfg.get("templates"))
-                res = send(db, org, mail["subject"], mail["text"], html=mail["html"], slack_text=f"{a['message']}\n{link}")
+                cfg = config_of(org)
+                res: dict[str, str] = {}
+                if cfg.get("enabled") and RANK.get(a["severity"], 0) >= RANK.get(cfg.get("min_severity", "high"), 3):
+                    base = get_settings().public_base_url.rstrip("/")
+                    link = f"{base}/{a['link']}" if a.get("link") else base
+                    mail = email_templates.render(email_templates.template_for(a["kind"]), kind=a["kind"], severity=a["severity"], message=a["message"],
+                                                  organization=org.name, link=link, overrides=cfg.get("templates"))
+                    res = send(db, org, mail["subject"], mail["text"], html=mail["html"], slack_text=f"{a['message']}\n{link}")
+                if a.get("id"):
+                    res.update({f"whatsapp {k}": v for k, v in whatsapp.deliver(db, org, a).items()})
                 for channel, outcome in res.items():
                     if outcome != "sent":
                         log.warning("alert delivery via %s failed: %s", channel, outcome)

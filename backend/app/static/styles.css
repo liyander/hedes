@@ -492,3 +492,9 @@ h4.small.muted { margin: 14px 0 4px; letter-spacing: .04em; font-weight: 600; }
 .heal-mode .radio-card:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .heal-mode .radio-card input { margin-top: 3px; accent-color: var(--accent); }
 .heal-mode .radio-card > span { display: flex; flex-direction: column; gap: 1px; }
+
+/* Fix page (opened from WhatsApp fix links; mostly on phones) */
+.page.narrow { max-width: 720px; }
+.row > .spacer { flex: 1; }
+.fix-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.fix-actions .btn { justify-content: center; min-height: 42px; }

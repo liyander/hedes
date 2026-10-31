@@ -124,10 +124,20 @@ PAGES = {
     },
     "settings": {
         "title": "Settings",
-        "summary": "Organisation policy, alert delivery (Slack and email), members and API tokens.",
-        "steps": ["Set allowed API destinations and thresholds in Organisation policy.", "Under Alert delivery add a Slack webhook and/or SMTP details, choose the minimum severity and press Send test.", "Invite members and set their roles; create API tokens for MCP clients."],
+        "summary": "Organisation policy, alert delivery (Slack, email and WhatsApp), members and API tokens.",
+        "steps": ["Set allowed API destinations and thresholds in Organisation policy.", "Under Alert delivery add a Slack webhook and/or SMTP details, choose the minimum severity and press Send test.",
+                  "WhatsApp: enter the Meta phone number ID and access token and turn it on; then each administrator adds and verifies their own number under My WhatsApp alerts.",
+                  "Invite members and set their roles; create API tokens for MCP clients."],
         "options": [{"name": "Credential rotation days", "text": "How old a secret may get before an alert."}, {"name": "Alert after N failures", "text": "Consecutive failed runs before a source raises an alert."}, {"name": "Minimum severity", "text": "Only alerts at or above this level are sent out."}, {"name": "Email templates", "text": "Each kind of alert (credential problem, review requested, API changed, data source problem, integration failure) has its own email. Customise the subject and intro, Preview it, and Send test email to check it in your inbox."}],
-        "tips": ["The Slack webhook and SMTP password are stored in the encrypted vault."],
+        "tips": ["The Slack webhook, SMTP password and WhatsApp token are stored in the encrypted vault.",
+                 "Without an approved WhatsApp template, messages only arrive within 24 hours of the recipient messaging your business number."],
+    },
+    "fix": {
+        "title": "Fix",
+        "summary": "Opened from a WhatsApp alert's link: the issue, and the actions that apply to it, one tap each.",
+        "steps": ["Read the alert and, for a proposed repair, its diagnosis, mapping changes and test result.", "Tap an action: approve or reject the fix, retry, pause or resume the data source, acknowledge, or mute.", "Use Full review for the diff and security report before approving anything you are unsure about."],
+        "options": [{"name": "Approve fix & publish", "text": "The same hash-bound approval as in Approvals; it is disabled while any blocker is listed."}, {"name": "Mute", "text": "Stops Slack, email and WhatsApp alerts for this integration for 1 or 24 hours; they still appear in the app."}],
+        "tips": ["The link expires after 24 hours and only works for the person it was sent to, signed in with their own account.", "Every action is in the Audit log as fix.<action> via whatsapp-fix-link."],
     },
     "users": {
         "title": "Users",

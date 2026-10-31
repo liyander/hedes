@@ -32,6 +32,7 @@ const ROUTES = {
   providers: ['./pages/providers.js', 'AI Providers'],
   users: ['./pages/users.js', 'Users'],
   settings: ['./pages/settings.js', 'Settings'],
+  fix: ['./pages/fix.js', 'Fix'],
 };
 
 export const go = (hash) => { if (location.hash === hash) route(); else location.hash = hash; };
@@ -142,6 +143,8 @@ export async function route() {
   }
   if (!state.user || parts[0] === 'login') {
     if (state.user && parts[0] === 'login') return go('#/dashboard');
+    // A WhatsApp fix link opened while signed out: come back to it after signing in.
+    if (parts[0] === 'fix') { try { sessionStorage.setItem('integra-return', location.hash); } catch (e) { /* ignore */ } }
     clearInterval(counter);
     document.querySelectorAll('#ask-ai, #assistant-drawer, #help-drawer').forEach((n) => n.remove());
     return (await import('./pages/login.js')).renderLogin(app);
