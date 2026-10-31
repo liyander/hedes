@@ -148,6 +148,7 @@ AUTH_GUIDE = {
     "api_key_query": "an API key. Look for 'API keys' in the service's account, developer or admin settings.",
     "basic": "a username (often your email) and a password or API token. Many services issue an API token to use instead of your password.",
     "ssws": "an Okta API token: Okta Admin Console > Security > API > Tokens > Create token.",
+    "oauth2_authorization_code": "nothing to copy: press Continue with <provider> in Credentials and approve read access (an administrator sets up the OAuth app once in Settings > Sign-in providers).",
     "oauth2_client_credentials": "a client ID and client secret from an OAuth app (often under 'Apps', 'Integrations' or 'API clients' in the admin console).",
     "aws_sigv4": "an AWS access key pair for an IAM user or role with permission for this API (IAM console > Users > Security credentials).",
 }

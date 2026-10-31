@@ -412,6 +412,23 @@ A **connection** is a named credential. Configurations refer to it by name throu
 
 ---
 
+### Sign in with a provider ("Continue with Google")
+
+Google, Microsoft, GitHub and Atlassian (Jira) connect with the provider's own sign-in instead of a pasted secret.
+
+1. **Once, an administrator** opens **Settings → Sign-in providers**, follows the provider's steps to register an OAuth app,
+   adds the shown **redirect URI** (`<public URL>/api/v1/oauth/callback`) to it, and saves its client ID and secret (the secret goes to the vault).
+2. **Anyone** presses **Continue with <provider>** in **Credentials**, signs in and approves read access. H.E.D.E.S asks for the
+   scopes of every data source that provider offers, so one sign-in covers them all.
+3. Back in H.E.D.E.S the **Import data sources** dialog lists the provider's sources (Google Workspace users, sign-ins and admin
+   activity; Microsoft 365 users, sign-ins and security alerts; GitHub organisation members and Dependabot alerts; Jira issues and
+   users - the Jira site is picked up automatically). Each becomes a draft integration that runs its safe tests and then needs an
+   administrator's approval, like any other.
+
+Tokens stay in the vault, are refreshed automatically before they expire, and are never shown or sent to the AI. **Reconnect**
+signs in again (for example after the provider revoked access). The sign-in is bound to the browser that started it, so a link
+someone else sends you cannot attach their account to your organisation.
+
 ## 12. Approvals
 
 **Admins** see the queue (filters: pending, approved, rejected, changes requested, all). **Builders** see their own requests and

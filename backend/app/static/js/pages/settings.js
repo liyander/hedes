@@ -2,9 +2,9 @@ import { $, api, esc, icon, badge, agoCell, pageHead, modal, toast, confirmBox, 
 import { state, isAdmin, isOwner, route } from '../app.js';
 
 export async function render({ el }) {
-  const [org, tokens, demo, notif, tpl, wa, myWa, slack] = await Promise.all([api('/organizations/current'), api('/tokens'), api('/demo/state'),
-    ...(isAdmin() ? [api('/settings/notifications'), api('/settings/notifications/templates'), api('/settings/whatsapp'), api('/me/whatsapp'), api('/settings/slack')]
-      : [null, null, null, null, null])]);
+  const [org, tokens, demo, notif, tpl, wa, myWa, slack, signIn] = await Promise.all([api('/organizations/current'), api('/tokens'), api('/demo/state'),
+    ...(isAdmin() ? [api('/settings/notifications'), api('/settings/notifications/templates'), api('/settings/whatsapp'), api('/me/whatsapp'), api('/settings/slack'), api('/oauth/providers')]
+      : [null, null, null, null, null, null])]);
   const p = org.policy || {};
   const admin = isAdmin();
   const origin = location.origin;
@@ -42,6 +42,7 @@ export async function render({ el }) {
     ${tpl ? templatesCard(tpl) : ''}
     ${wa ? `<div class="split even">${whatsappCard(wa)}${myWhatsappCard(myWa)}</div>` : ''}
     ${slack ? slackCard(slack) : ''}
+    ${signIn ? signInCard(signIn) : ''}
     <div class="card"><div class="card-head"><h2>Members</h2><span class="spacer"></span>${admin ? `<button class="btn sm" id="invite">${icon('plus', 13)} Invite</button>` : ''}</div>
       <div class="table-scroll"><table><thead><tr><th>User</th><th>Email</th><th>Role</th></tr></thead><tbody>
       ${org.members.map((m) => `<tr><td><b>${esc(m.name || m.username)}</b> <span class="muted mono small">${esc(m.username)}</span></td><td>${esc(m.email)}</td>
@@ -90,6 +91,7 @@ export async function render({ el }) {
   });
   if (tpl) wireTemplates(el);
   if (slack) wireSlack(el, slack);
+  if (signIn) wireSignIn(el);
   bindWhatsapp(el);
   $('#drift', el)?.addEventListener('click', async () => { await api('/demo/drift', { method: 'POST', body: { enabled: !demo.drift } }); route(); });
   $('#new-token', el).addEventListener('click', async () => {
@@ -342,6 +344,32 @@ function bindWhatsapp(el) {
 
 // Slack: administrators talk to the AI assistant from Slack (DM the app or @mention it). Socket Mode: no public URL needed.
 const SLACK_STATE = { connected: 'ok', connecting: 'running', error: 'failed', stopped: 'disabled' };
+
+function signInCard(providers) {
+  return `<div class="card" id="signin"><div class="card-head"><h2>${icon('link', 16)} Sign-in providers</h2></div><div class="card-body">
+    <p class="small muted" style="margin-top:0">Register an OAuth app at a provider once, and everyone can connect it with <b>Continue with …</b> in Credentials and import its data sources. The client secret goes to the vault.</p>
+    ${providers.map((pr) => `<details class="op-row" style="display:block"><summary class="row between" style="cursor:pointer"><b>${esc(pr.label)}</b>${badge(pr.configured ? 'active' : 'pending', pr.configured ? 'set up' : 'not set up')}</summary>
+      <form data-provider="${esc(pr.id)}" style="margin-top:10px">
+        <ol class="small" style="margin:0 0 10px 18px;padding:0">${pr.setup.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>
+        <div class="field"><label>Redirect URI</label><pre style="white-space:pre-wrap;word-break:break-all;margin:0">${esc(pr.redirect_uri)}</pre></div>
+        <div class="hint" style="margin-bottom:10px">Scopes requested: <code>${pr.scopes.map(esc).join(' ') || '(provider defaults)'}</code> · <a class="link" href="${esc(pr.console)}" target="_blank" rel="noopener">Open the ${esc(pr.label)} console</a></div>
+        <div class="grid-2"><div class="field"><label>Client ID</label><input type="text" name="client_id" value="${esc(pr.client_id || '')}" required></div>
+          <div class="field"><label>Client secret</label><input type="password" name="client_secret" autocomplete="new-password" placeholder="${pr.configured ? 'saved - leave blank to keep' : ''}"></div></div>
+        ${Object.entries(pr.setting_fields || {}).map(([k, f]) => `<div class="field"><label>${esc(f.label)}</label><input type="text" name="setting:${esc(k)}" value="${esc((pr.settings || {})[k] || f.default || '')}"><div class="hint">${esc(f.help || '')}</div></div>`).join('')}
+        <button class="btn primary sm" type="submit">Save</button></form></details>`).join('')}
+  </div></div>`;
+}
+
+function wireSignIn(el) {
+  el.querySelectorAll('#signin form[data-provider]').forEach((f) => f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const v = Object.fromEntries([...f.querySelectorAll('[name]')].map((i) => [i.name, i.value.trim()]));
+    const body = { client_id: v.client_id, settings: {} };
+    if (v.client_secret) body.client_secret = v.client_secret;
+    Object.keys(v).filter((k) => k.startsWith('setting:')).forEach((k) => { body.settings[k.slice(8)] = v[k]; });
+    try { await api(`/oauth/providers/${f.dataset.provider}`, { method: 'PUT', body }); toast('Sign-in provider saved', 'ok'); route(); } catch (err) { toast(err.message, 'bad'); }
+  }));
+}
 
 function slackCard(s) {
   const st = s.status || { state: 'stopped' };

@@ -74,6 +74,7 @@
                 "basic",
                 "ssws",
                 "oauth2_client_credentials",
+                "oauth2_authorization_code",
                 "aws_sigv4"
               ]
             },
@@ -255,6 +256,10 @@
             },
             "next_cursor_path": {
               "type": "string"
+            },
+            "next_url_path": {
+              "type": "string",
+              "description": "link pagination: JSONPath of the next page's URL in the response body (else the Link header)"
             },
             "max_pages": {
               "type": "integer",

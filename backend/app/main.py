@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import ai, approvals, assistant, auth, connections, healing, integrations, notifications, runtime, slack, sources, templates, users, whatsapp, workflows
+from .api import ai, approvals, assistant, auth, connections, healing, oauth, integrations, notifications, runtime, slack, sources, templates, users, whatsapp, workflows
 from .core.config import STATIC_DIR, get_settings
 from .core.db import init_db, session_scope
 from .mock import services as mock_services
@@ -40,7 +40,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="H.E.D.E.S", version="1.0.0", lifespan=lifespan,
               description="AI-assisted, configuration-driven integration platform with admin-governed activation.")
 
-for r in (auth.router, users.router, slack.router, healing.router, ai.router, integrations.router, approvals.router, connections.router, runtime.router,
+for r in (auth.router, users.router, slack.router, oauth.router, healing.router, ai.router, integrations.router, approvals.router, connections.router, runtime.router,
           runtime.mcp_router, notifications.router, assistant.router, sources.router, templates.router, workflows.router, workflows.hooks_router,
           whatsapp.router, whatsapp.fix_router):
     app.include_router(r)

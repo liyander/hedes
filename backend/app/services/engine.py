@@ -288,6 +288,8 @@ def apply_auth(req: PreparedRequest, auth: dict, credential: dict | None) -> Non
     elif kind == "basic" and secret.get("username") is not None:
         raw = f"{secret['username']}:{secret.get('password', '')}".encode()
         req.headers["Authorization"] = "Basic " + base64.b64encode(raw).decode()
+    elif kind == "oauth2_authorization_code" and secret.get("access_token"):
+        req.headers["Authorization"] = f"Bearer {secret['access_token']}"  # signed in with the provider; refreshed by the caller
     elif kind == "ssws" and secret.get("token"):
         req.headers["Authorization"] = f"SSWS {secret['token']}"  # Okta
     elif kind == "oauth2_client_credentials" and secret.get("client_id") and secret.get("client_secret"):
@@ -549,7 +551,11 @@ def execute(config: dict, op_id: str, inputs: dict, *, credential: dict | None =
                         if not items or len(items) < int(pag.get("size", 50)) or (total_ok and isinstance(total, int) and offset >= total):
                             break
                     elif pag["type"] == "link":
-                        nxt = _next_link(headers, req.url)
+                        if pag.get("next_url_path"):  # the next page's URL is in the body (Microsoft Graph's @odata.nextLink)
+                            found_next, nxt = jsonpath.query(body, pag["next_url_path"])
+                            nxt = nxt if found_next and isinstance(nxt, str) and nxt.startswith(req.url.split("?")[0]) else None
+                        else:
+                            nxt = _next_link(headers, req.url)
                         if not nxt or not items:  # some APIs (Okta System Log) keep offering a next link after the last page
                             break
                         req.query.update(dict(parse_qsl(urlsplit(nxt).query)))

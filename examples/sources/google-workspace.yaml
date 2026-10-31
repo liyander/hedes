@@ -1,0 +1,115 @@
+template:
+  id: google-workspace
+  title: Google Workspace
+  category: Identity
+  summary: Workspace users, sign-in activity and admin console changes from the Admin SDK (Directory and Reports APIs).
+  free_tier: Needs a Google Workspace (or Cloud Identity) account; sign in as a super admin or an admin with the Reports and Users read privileges.
+  docs: https://developers.google.com/admin-sdk/reports/reference/rest/v1/activities/list
+  credential:
+    type: oauth2_authorization_code
+    provider: google
+    name: google
+    scopes:
+      - https://www.googleapis.com/auth/admin.directory.user.readonly
+      - https://www.googleapis.com/auth/admin.reports.audit.readonly
+    how: Press "Continue with Google" in Credentials and approve read access with a Workspace administrator account.
+  setup:
+    - An administrator adds the Google OAuth app once in Settings > Sign-in providers (and enables the Admin SDK API in that Google Cloud project).
+    - Press "Continue with Google" in Credentials and sign in as a Workspace administrator.
+    - Pages follow nextPageToken; activity is read incrementally from the newest event already stored.
+schema_version: "1.0"
+integration:
+  id: google-workspace
+  name: Google Workspace
+  version: "1.0.0"
+  transport: http
+  description: Google Workspace users and Admin SDK audit activity in the common user and event formats (read-only).
+  base_url: https://admin.googleapis.com
+  authentication:
+    type: oauth2_authorization_code
+    credential_ref: google
+  rate_limit: {requests_per_minute: 60}
+  operations:
+    - id: list_users
+      description: All users in the Workspace account
+      method: GET
+      path: /admin/directory/v1/users
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {customer: my_customer, maxResults: "500", orderBy: email}
+      pagination: {type: cursor, cursor_param: pageToken, next_cursor_path: "$.nextPageToken", max_pages: 50}
+      retry: {max_attempts: 3, backoff_seconds: 2, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$.users"
+      ingest:
+        entity: user
+        fields:
+          id: "$.id"
+          name: "$.name.fullName"
+          email: {path: "$.primaryEmail", transform: lower}
+          status: "$.suspended"
+          last_login: "$.lastLoginTime"
+        value_maps: {status: {"True": suspended, "False": active, "true": suspended, "false": active}}
+        schedule: {interval_minutes: 360}
+    - id: list_login_activity
+      description: Sign-ins, failed sign-ins and suspicious logins
+      method: GET
+      path: /admin/reports/v1/activity/users/all/applications/login
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {maxResults: "1000"}
+      pagination: {type: cursor, cursor_param: pageToken, next_cursor_path: "$.nextPageToken", max_pages: 20}
+      retry: {max_attempts: 3, backoff_seconds: 2, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$.items"
+      ingest:
+        entity: event
+        category: identity
+        fields:
+          event_id: "$.id.uniqueQualifier"
+          timestamp: "$.id.time"
+          actor: "$.actor.email"
+          action: "$.events[0].name"
+          target: "$.ipAddress"
+          outcome: "$.events[0].name"
+          severity: {path: "$.events[0].name", default: info}
+          message: "$.events[0].type"
+        value_maps:
+          outcome: {login_success: success, logout: success, login_failure: failure, login_challenge: unknown, login_verification: unknown}
+          severity: {login_success: info, logout: info, login_failure: medium, login_challenge: low, suspicious_login: high,
+                     suspicious_login_less_secure_app: high, account_disabled_hijacked: critical, gov_attack_warning: critical}
+        incremental: {param: startTime, format: iso8601, overlap_seconds: 120, initial_lookback_days: 7}
+        schedule: {interval_minutes: 15}
+    - id: list_admin_activity
+      description: Changes made in the Google Admin console
+      method: GET
+      path: /admin/reports/v1/activity/users/all/applications/admin
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {maxResults: "1000"}
+      pagination: {type: cursor, cursor_param: pageToken, next_cursor_path: "$.nextPageToken", max_pages: 20}
+      retry: {max_attempts: 3, backoff_seconds: 2, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$.items"
+      ingest:
+        entity: event
+        category: admin
+        fields:
+          event_id: "$.id.uniqueQualifier"
+          timestamp: "$.id.time"
+          actor: "$.actor.email"
+          action: "$.events[0].name"
+          target: "$.events[0].parameters[0].value"
+          message: "$.events[0].type"
+        defaults: {outcome: success, severity: low}
+        incremental: {param: startTime, format: iso8601, overlap_seconds: 120, initial_lookback_days: 7}
+        schedule: {interval_minutes: 15}

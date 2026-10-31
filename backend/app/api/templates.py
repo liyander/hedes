@@ -33,8 +33,13 @@ class TemplateIn(BaseModel):
 
 @router.post("/source-templates/{tid}/create")
 def create_from_template(tid: str, body: TemplateIn, p: Principal = Depends(require_role("user")), db: Session = Depends(get_db)):
+    return create_template_integration(db, p, tid, body.variables)
+
+
+def create_template_integration(db: Session, p: Principal, tid: str, variables: dict) -> dict:
+    """A draft integration from a source template, with its safe tests run (also used by sign-in imports)."""
     try:
-        cfg = catalog.build_from_template(tid, body.variables)
+        cfg = catalog.build_from_template(tid, variables)
     except catalog.TemplateError as e:
         raise HTTPException(422, str(e))
     integ, v = integrations.create_integration(db, p.org_id, p, cfg, "template", notes=f"Created from the {tid} template")

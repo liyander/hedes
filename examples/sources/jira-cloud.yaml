@@ -1,0 +1,84 @@
+template:
+  id: jira-cloud
+  title: Jira Cloud (sign in with Atlassian)
+  category: Ticketing
+  summary: Recently updated Jira issues (as events) and Jira users, connected by signing in with Atlassian. Read-only.
+  free_tier: Jira Cloud Free plan.
+  docs: https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/
+  credential:
+    type: oauth2_authorization_code
+    provider: atlassian
+    name: atlassian
+    scopes: [read:jira-work, read:jira-user]
+    how: Press "Continue with Atlassian" in Credentials and pick the Jira site to share.
+  variables:
+    - {name: cloud_id, label: Jira site (cloud) ID, placeholder: 1324a887-45db-1bf4-1e99-ef0ff456d421, pattern: "^[0-9a-f-]{36}$", help: Filled in automatically from the site you chose when signing in}
+  setup:
+    - An administrator adds the Atlassian OAuth 2.0 (3LO) app once in Settings > Sign-in providers.
+    - Press "Continue with Atlassian" in Credentials and choose the Jira site; its cloud ID is picked up automatically.
+    - Requests go through api.atlassian.com/ex/jira/<cloud id>, as Atlassian requires for OAuth apps.
+schema_version: "1.0"
+integration:
+  id: jira-cloud
+  name: Jira Cloud (OAuth)
+  version: "1.0.0"
+  transport: http
+  description: Jira issues and users in the common event and user formats (read-only).
+  base_url: "https://api.atlassian.com/ex/jira/{{cloud_id}}"
+  authentication:
+    type: oauth2_authorization_code
+    credential_ref: atlassian
+  rate_limit: {requests_per_minute: 60}
+  operations:
+    - id: search_issues
+      description: Issues updated in the last 30 days
+      method: GET
+      path: /rest/api/3/search/jql
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query:
+          jql: "updated >= -30d ORDER BY updated DESC"
+          maxResults: "100"
+          fields: "summary,status,priority,assignee,reporter,updated,created"
+      pagination: {type: cursor, cursor_param: nextPageToken, next_cursor_path: "$.nextPageToken", max_pages: 30}
+      retry: {max_attempts: 3, backoff_seconds: 2, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$.issues"
+      ingest:
+        entity: event
+        category: ticket
+        fields:
+          event_id: "$.key"
+          timestamp: "$.fields.updated"
+          actor: "$.fields.reporter.displayName"
+          action: "$.fields.summary"
+          target: "$.fields.assignee.displayName"
+          severity: "$.fields.priority.name"
+          message: "$.fields.status.name"
+        defaults: {outcome: unknown}
+        value_maps: {severity: {Highest: critical, High: high, Medium: medium, Low: low, Lowest: low}}
+        schedule: {interval_minutes: 15}
+    - id: list_users
+      description: Jira users
+      method: GET
+      path: /rest/api/3/users/search
+      input_schema:
+        type: object
+        properties: {}
+      pagination: {type: offset, offset_param: startAt, size_param: maxResults, size: 100, max_pages: 50}
+      retry: {max_attempts: 3, backoff_seconds: 2, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$"
+      ingest:
+        entity: user
+        fields:
+          id: "$.accountId"
+          name: "$.displayName"
+          email: "$.emailAddress"
+          status: "$.active"
+        value_maps: {status: {"True": active, "False": inactive, "true": active, "false": inactive}}
+        schedule: {interval_minutes: 360}

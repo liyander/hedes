@@ -57,7 +57,7 @@ PAGES = {
     "credentials": {
         "title": "Credentials",
         "summary": "Secrets for external services, stored encrypted. Configurations only reference them by name.",
-        "steps": ["Press Connect credential.", "Choose the type that matches the integration (Bearer, API key, Basic, Okta SSWS, OAuth2 client credentials, AWS SigV4).", "Optionally set an expiry date; you are alerted a week before.", "Use Test to verify, Rotate to replace the secret, Revoke to disable."],
+        "steps": ["For Google, Microsoft, GitHub or Atlassian press Continue with <provider>, approve read access, then import its data sources (an administrator sets up the OAuth app once in Settings > Sign-in providers).", "For any other API press Connect credential.", "Choose the type that matches the integration (Bearer, API key, Basic, Okta SSWS, OAuth2 client credentials, AWS SigV4).", "Optionally set an expiry date; you are alerted a week before.", "Use Test to verify, Rotate to replace the secret, Revoke to disable."],
         "options": [{"name": "env:NAME", "text": "Enter env:MY_VAR instead of a secret to read the value from a server environment variable at use time. Only variables listed in the server setting CONNECTION_ENV_VARS are allowed."}, {"name": "Lifetime column", "text": "Days since rotation and expiry; warnings appear when rotation is due or the secret expires soon."}],
         "tips": ["Secrets are never shown again, never sent to an AI model and never written to logs."],
     },

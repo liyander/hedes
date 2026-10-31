@@ -86,7 +86,8 @@ def credential_for(db: Session, org_id: str, config: dict) -> dict | None:
         return None
     if conn.expires_at and conn.expires_at <= utcnow():
         return None  # expired credentials are treated as missing so the failure names the real problem
-    return vault.read_secret(db, conn.secret_ref, org_id)
+    from . import oauth
+    return oauth.fresh_secret(db, conn, vault.read_secret(db, conn.secret_ref, org_id))
 
 
 def touch_connection(db: Session, org_id: str, config: dict) -> None:

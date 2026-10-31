@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from ..core.db import get_db, utcnow
 from ..core.security import Principal, current_principal, require_role
 from ..models import Connection, Integration, IntegrationVersion
-from ..services import audit, egress, engine, vault
+from ..services import audit, egress, engine, oauth, vault
 from ..services.integrations import org_policy
 from .common import iso, username
 
@@ -169,7 +169,7 @@ def test_connection(cid: str, p: Principal = Depends(require_role("user")), db: 
     c = _owned(db, p, cid)
     if c.status == "revoked":
         raise HTTPException(409, "Connection is revoked")
-    secret = vault.read_secret(db, c.secret_ref, p.org_id)
+    secret = oauth.fresh_secret(db, c, vault.read_secret(db, c.secret_ref, p.org_id))
     target = None
     if c.test_url and c.auth_type in ("oauth2_client_credentials", "aws_sigv4"):
         return {"ok": None, "message": "This credential type cannot be probed with a bare URL. Use “Run now” on the data source, or Test Lab."}

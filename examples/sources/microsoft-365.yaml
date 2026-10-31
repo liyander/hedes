@@ -1,0 +1,111 @@
+template:
+  id: microsoft-365
+  title: Microsoft 365 / Entra ID
+  category: Identity
+  summary: Entra ID users, sign-in logs and Microsoft security alerts through Microsoft Graph.
+  free_tier: Users work on every tenant; sign-in logs need Entra ID P1 or P2. Sign in as an administrator who can grant admin consent.
+  docs: https://learn.microsoft.com/graph/api/signin-list
+  credential:
+    type: oauth2_authorization_code
+    provider: microsoft
+    name: microsoft
+    scopes: [User.Read.All, AuditLog.Read.All, SecurityAlert.Read.All]
+    how: Press "Continue with Microsoft" in Credentials and approve read access with an administrator account (grant admin consent).
+  setup:
+    - An administrator registers the app in Microsoft Entra, adds the delegated Graph permissions User.Read.All, AuditLog.Read.All and SecurityAlert.Read.All, grants admin consent, then adds it in Settings > Sign-in providers.
+    - Press "Continue with Microsoft" in Credentials.
+    - Pages follow @odata.nextLink from the response body.
+schema_version: "1.0"
+integration:
+  id: microsoft-365
+  name: Microsoft 365
+  version: "1.0.0"
+  transport: http
+  description: Entra ID users, sign-ins and security alerts from Microsoft Graph in the common user and event formats (read-only).
+  base_url: https://graph.microsoft.com
+  authentication:
+    type: oauth2_authorization_code
+    credential_ref: microsoft
+  rate_limit: {requests_per_minute: 120}
+  operations:
+    - id: list_users
+      description: All users in the directory
+      method: GET
+      path: /v1.0/users
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {"$select": "id,displayName,userPrincipalName,accountEnabled", "$top": "999"}
+      pagination: {type: link, next_url_path: "$['@odata.nextLink']", max_pages: 50}
+      retry: {max_attempts: 3, backoff_seconds: 2, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$.value"
+      ingest:
+        entity: user
+        fields:
+          id: "$.id"
+          name: "$.displayName"
+          email: {path: "$.userPrincipalName", transform: lower}
+          status: "$.accountEnabled"
+        value_maps: {status: {"True": active, "False": disabled, "true": active, "false": disabled}}
+        schedule: {interval_minutes: 360}
+    - id: list_sign_ins
+      description: Interactive sign-ins (newest first)
+      method: GET
+      path: /v1.0/auditLogs/signIns
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {"$top": "500"}
+      pagination: {type: link, next_url_path: "$['@odata.nextLink']", max_pages: 5}
+      retry: {max_attempts: 3, backoff_seconds: 2, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$.value"
+      ingest:
+        entity: event
+        category: identity
+        fields:
+          event_id: "$.id"
+          timestamp: "$.createdDateTime"
+          actor: "$.userPrincipalName"
+          action: "$.appDisplayName"
+          target: "$.ipAddress"
+          outcome: "$.status.errorCode"
+          severity: {path: "$.riskLevelAggregated", default: info}
+          message: "$.status.failureReason"
+        value_maps:
+          outcome: {"0": success}
+          severity: {none: info, hidden: info, unknownFutureValue: info, low: low, medium: medium, high: high}
+        schedule: {interval_minutes: 15}
+    - id: list_security_alerts
+      description: Alerts from Microsoft Defender and the other Microsoft security products
+      method: GET
+      path: /v1.0/security/alerts_v2
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {"$top": "100"}
+      pagination: {type: link, next_url_path: "$['@odata.nextLink']", max_pages: 10}
+      retry: {max_attempts: 3, backoff_seconds: 2, max_wait_seconds: 60}
+      response:
+        status_codes: [200]
+        items_path: "$.value"
+      ingest:
+        entity: event
+        category: alert
+        fields:
+          event_id: "$.id"
+          timestamp: "$.createdDateTime"
+          actor: "$.serviceSource"
+          action: "$.title"
+          target: "$.status"
+          severity: "$.severity"
+          message: "$.description"
+        defaults: {outcome: unknown}
+        value_maps: {severity: {informational: info, low: low, medium: medium, high: high, unknownFutureValue: info}}
+        schedule: {interval_minutes: 15}

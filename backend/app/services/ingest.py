@@ -271,7 +271,8 @@ def _credential(db: Session, org_id: str, config: dict) -> tuple[dict | None, Co
         return None, conn
     if conn.expires_at and conn.expires_at <= utcnow():
         return None, conn
-    return vault.read_secret(db, conn.secret_ref, org_id), conn
+    from . import oauth
+    return oauth.fresh_secret(db, conn, vault.read_secret(db, conn.secret_ref, org_id)), conn
 
 
 def _next_run(src: IngestSource) -> datetime:

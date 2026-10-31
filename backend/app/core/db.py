@@ -69,14 +69,17 @@ def session_scope():
         db.close()
 
 
-def _add_missing_columns() -> None:
-    """create_all never alters existing tables; add columns introduced since a database was created (all nullable)."""
+def _add_missing_columns(existing: set[str]) -> None:
+    """create_all never alters existing tables; add columns introduced since a database was created (all nullable).
+    All tables' columns are read in one reflection call: per-table lookups against a remote database (Neon) took
+    longer than a hosting platform's startup limit."""
     from sqlalchemy import inspect, text
-    insp = inspect(engine)
+    names = [t.name for t in Base.metadata.sorted_tables if t.name in existing]
+    columns = {key[-1]: cols for key, cols in inspect(engine).get_multi_columns(filter_names=names).items()} if names else {}
     for table in Base.metadata.sorted_tables:
-        if not insp.has_table(table.name):
+        if table.name not in columns:
             continue
-        have = {c["name"] for c in insp.get_columns(table.name)}
+        have = {c["name"] for c in columns[table.name]}
         for col in table.columns:
             if col.name not in have and not col.primary_key:
                 ddl = col.type.compile(dialect=engine.dialect)
@@ -85,6 +88,11 @@ def _add_missing_columns() -> None:
 
 
 def init_db() -> None:
+    from sqlalchemy import inspect
+
     from .. import models  # noqa: F401  (register tables)
-    Base.metadata.create_all(engine)
-    _add_missing_columns()
+    existing = set(inspect(engine).get_table_names())
+    missing = [t for t in Base.metadata.sorted_tables if t.name not in existing]
+    if missing:
+        Base.metadata.create_all(engine, tables=missing, checkfirst=False)
+    _add_missing_columns(existing)
