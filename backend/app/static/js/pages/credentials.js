@@ -25,6 +25,7 @@ export async function connectModal({ name = '', auth_type = 'bearer', header = '
       <div class="field"><label>Type</label><select name="auth_type" ${fixed || rotateId ? 'disabled' : ''}>${Object.entries(AUTH_LABEL).map(([k, v]) => `<option value="${k}" ${k === auth_type ? 'selected' : ''}>${v}</option>`).join('')}</select>${header ? `<div class="hint">Sent as header <code>${esc(header)}</code></div>` : ''}</div>
     </div>
     <div id="secret">${secretFields(auth_type)}</div>
+    <div class="hint" style="margin:-6px 0 12px">${icon('key', 12)} Prefer not to store the secret here? Type <code>env:MY_VARIABLE</code> in the field and the server reads that environment variable each time it is used.</div>
     <div class="field"><label>Expires on (optional)</label><input type="date" name="expires_at"><div class="hint">You are alerted a week before, and executions stop using an expired secret.</div></div>
     ${rotateId ? '' : '<div class="field"><label>Test URL (optional)</label><input type="url" name="test_url" placeholder="https://api.example.com/user"><div class="hint">A read-only endpoint used by “Test connection”.</div></div>'}
     ${name === 'taskflow' ? '<div class="callout info small">Demo: the bundled TaskFlow mock API accepts the token <code>taskflow-demo-token</code>.</div>' : ''}`;

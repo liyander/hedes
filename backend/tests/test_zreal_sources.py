@@ -33,6 +33,9 @@ def test_every_template_builds_a_valid_configuration(server, tid, variables):
     res = validate_config(cfg)
     assert res["valid"], res["errors"]
     assert "{{" not in str(cfg)
+    from app.services import agents, integrations
+    report = integrations.run_mock_tests(cfg, agents.generate_tests(cfg, []))      # the platform's safe tests pass for every template
+    assert report["total"] and report["failed"] == 0, [c for c in report["cases"] if not c["passed"]]
 
 
 def test_template_variables_are_validated(server, builder):

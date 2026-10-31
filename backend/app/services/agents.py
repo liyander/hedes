@@ -410,7 +410,13 @@ def generate_tests(config: dict, documents: list[dict]) -> list[dict]:
             body = documented["response_example"] if documented.get("response_example") is not None else openapi.sample_value(documented["response_schema"])
             origin = "documented response schema"
         else:
-            resp = {**op["response"], "mapping": op["ingest"]["fields"]} if op.get("ingest") and not op["response"].get("mapping") else op["response"]
+            resp = op["response"]
+            if op.get("ingest") and not resp.get("mapping"):
+                paths: dict[str, str] = {}
+                for fname, fspec in op["ingest"]["fields"].items():  # a field may be a JSONPath or {path | paths, transform, ...}
+                    for n, path in enumerate([fspec] if isinstance(fspec, str) else ([fspec["path"]] if fspec.get("path") else []) + list(fspec.get("paths") or [])):
+                        paths[f"{fname}_{n}" if n else fname] = path
+                resp = {**resp, "mapping": paths}
             body = _doc_from_mapping(resp)
             origin = "synthesised from mapping"
         if status == 204:

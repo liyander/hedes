@@ -418,7 +418,21 @@ def chat(db: Session, p: Principal, thread: AssistantThread, text: str, tags: li
     return _respond(db, p, thread, gw, page, clean_tags)
 
 
+def thread_tags(db: Session, thread: AssistantThread, current: list[dict]) -> list[dict]:
+    """Tags stay in scope for follow-up questions: the current message's tags plus those of recent user messages."""
+    seen, out = set(), []
+    recent = db.scalars(select(AssistantMessage).where(AssistantMessage.thread_id == thread.id, AssistantMessage.role == "user")
+                        .order_by(AssistantMessage.created_at.desc()).limit(6)).all()
+    for t in list(current) + [t for m in recent for t in (m.tags or [])]:
+        key = (t.get("type"), t.get("id"))
+        if key not in seen and t.get("type") and t.get("id"):
+            seen.add(key)
+            out.append(t)
+    return out[:6]
+
+
 def _respond(db: Session, p: Principal, thread: AssistantThread, gw: Gateway, page: str | None, tags: list[dict]) -> AssistantMessage:
+    tags = thread_tags(db, thread, tags)
     system = SYSTEM + tool_doc() + "\n\n" + help_content.knowledge_text(page)
     context = tag_context(db, p, tags)
     if context:

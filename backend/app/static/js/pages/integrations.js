@@ -1,19 +1,21 @@
 import { $, api, esc, icon, badge, method, agoCell, pageHead, emptyState, toast, json, confirmBox, riskBadge, readFile } from '../lib.js';
-import { go, route, isAdmin } from '../app.js';
+import { go, route, isAdmin, state } from '../app.js';
+import { askAbout } from '../assistant.js';
 import { connectModal } from './credentials.js';
 
 export async function render(ctx) {
   if (ctx.params[0] === 'new') return renderNew(ctx);
+  if (ctx.params[0] === 'sources') return renderSources(ctx);
   if (ctx.params[0]) return renderDetail(ctx);
   const rows = await api('/integrations');
   ctx.el.innerHTML = `<div class="page">
     ${pageHead('plug', 'Integrations', 'Every connection is a versioned, declarative configuration executed by the same generic engine.',
-      `<a class="btn" href="#/integrations/new">${icon('upload', 16)} Import / paste config</a><a class="btn primary" href="#/studio">${icon('spark', 16)} Build with AI</a>`)}
+      `<a class="btn" href="#/integrations/new">${icon('upload', 16)} Import / paste config</a><a class="btn" href="#/studio/new">${icon('spark', 16)} Build with AI</a><a class="btn primary" href="#/integrations/sources">${icon('db', 16)} Add data source</a>`)}
     <div class="card">${rows.length ? `<div class="table-scroll"><table><thead><tr><th>Integration</th><th>Status</th><th>Live</th><th>Latest</th><th>Auth</th><th>Ops</th><th>Risk</th><th>Updated</th></tr></thead><tbody>
       ${rows.map((i) => `<tr class="clickable" data-go="#/integrations/${i.id}"><td><b>${esc(i.name)}</b><div class="muted small mono">${esc(i.slug)} · ${esc(i.base_url || '')}</div></td>
         <td>${badge(i.status)}</td><td class="mono">${esc(i.published_version || '—')}</td><td class="mono">${esc(i.latest_version || '')} ${i.latest_status !== 'published' ? badge(i.latest_status) : ''}</td>
         <td><code>${esc(i.auth_type || '')}</code></td><td>${i.operations}</td><td>${badge(i.risk)}</td><td class="nowrap">${agoCell(i.updated_at)}</td></tr>`).join('')}
-    </tbody></table></div>` : emptyState('plug', 'No integrations yet', 'Build one with AI or import an OpenAPI document.', '<a class="btn primary" href="#/studio">Open AI Studio</a>')}</div></div>`;
+    </tbody></table></div>` : emptyState('plug', 'No integrations yet', 'Add a real data source (Okta, GitHub, Jira, NVD, AbuseIPDB, CISA KEV), build one with AI, or import an OpenAPI document.', '<a class="btn primary" href="#/integrations/sources">Add data source</a>')}</div></div>`;
   ctx.el.addEventListener('click', (e) => { const r = e.target.closest('[data-go]'); if (r) go(r.dataset.go); });
 }
 
@@ -26,7 +28,7 @@ async function renderNew({ el }) {
       <div class="card card-pad"><h2>Import OpenAPI</h2><p class="muted small">Pick the operations to expose. Base URL and authentication are read from the document.</p>
         <div class="field"><label>OpenAPI document (JSON or YAML)</label><textarea class="code" id="oas" style="min-height:180px" placeholder="Paste the document, or choose a file below"></textarea></div>
         <div class="row"><label class="btn sm" style="margin:0">${icon('upload', 14)} Choose file<input type="file" id="oas-file" accept=".json,.yaml,.yml" hidden></label>
-          <button class="btn sm ghost" id="oas-sample">Load TaskFlow sample</button><span class="grow"></span><button class="btn" id="oas-read">Read operations</button></div>
+          ${state.demo ? '<button class="btn sm ghost" id="oas-sample">Load TaskFlow sample (demo)</button>' : ''}<span class="grow"></span><button class="btn" id="oas-read">Read operations</button></div>
         <div id="oas-ops" style="margin-top:14px"></div></div>
       <div class="card card-pad"><h2>Paste configuration</h2><p class="muted small">YAML or JSON following <code>shared/integration.schema.json</code>.</p>
         <div class="field"><label>Start from an example</label><select id="ex"><option value="">—</option>${examples.map((x) => `<option value="${esc(x.slug)}">${esc(x.name)}</option>`).join('')}</select></div>
@@ -45,7 +47,7 @@ async function renderNew({ el }) {
     } catch (err) { toast(err.message, 'bad'); }
   });
   $('#oas-file', el).addEventListener('change', async (e) => { if (e.target.files[0]) $('#oas', el).value = await readFile(e.target.files[0]); });
-  $('#oas-sample', el).addEventListener('click', async () => { $('#oas', el).value = await (await fetch('/mock/taskflow/openapi.json')).text(); });
+  $('#oas-sample', el)?.addEventListener('click', async () => { $('#oas', el).value = await (await fetch('/mock/taskflow/openapi.json')).text(); });
   $('#oas-read', el).addEventListener('click', async () => {
     try {
       const r = await api('/integrations/import/openapi', { method: 'POST', body: { content: $('#oas', el).value, preview: true } });
@@ -69,7 +71,7 @@ let tabState = 'overview';
 async function renderDetail({ el, params }) {
   const i = await api(`/integrations/${params[0]}`);
   const latest = i.versions[0];
-  const v = await api(`/versions/${params[1] || latest.id}`);
+  const [v, guide] = await Promise.all([api(`/versions/${params[1] || latest.id}`), api(`/integrations/${params[0]}/guide`)]);
   const tab = params[2] || tabState;
   const cfg = v.config.integration;
   const isDraft = v.status === 'draft';
@@ -78,6 +80,7 @@ async function renderDetail({ el, params }) {
     <div class="crumb"><a href="#/integrations">Integrations</a> / ${esc(i.name)}</div>
     ${pageHead('plug', i.name, `${esc(i.description || '')}<br><span class="mono small">${esc(cfg.base_url)}</span>`, `
       ${badge(i.status)}
+      <button class="btn" data-a="discuss">${icon('spark', 15)} Discuss with AI</button>
       ${isDraft ? `<button class="btn" data-a="tests">${icon('flask', 15)} Run safe tests</button><button class="btn primary" data-a="submit">${icon('check', 15)} Submit for approval</button>`
         : `<button class="btn" data-a="revise">${icon('doc', 15)} New revision</button>`}
       ${i.status === 'published' ? `<a class="btn" href="#/testlab/${i.id}">${icon('play', 15)} Test Lab</a>` : ''}
@@ -91,6 +94,7 @@ async function renderDetail({ el, params }) {
     ${auth.type && auth.type !== 'none' ? `<div class="callout info small" style="margin-bottom:14px"><div class="row between"><span>${icon('key', 14)} Uses the <b>${esc(auth.type)}</b> connection <code>${esc(auth.credential_ref)}</code>${v.security.checks?.credential_connected === false ? ' — <b>not connected yet</b>' : v.security.checks?.credential_connected ? ' — connected' : ''}.</span>
       ${v.security.checks?.credential_connected ? '' : `<button class="btn sm" data-a="connect">Connect</button>`}</div></div>` : ''}
     ${v.notes ? `<div class="callout small" style="margin-bottom:14px">${esc(v.notes)}</div>` : ''}
+    ${guideHtml(guide)}
     <div class="tabs" style="margin-bottom:16px">${['overview', 'configuration', 'security', 'tests', 'versions', 'approvals'].map((k) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
     <div id="tab"></div></div>`;
 
@@ -101,7 +105,7 @@ async function renderDetail({ el, params }) {
     if (t === 'overview') {
       pane.innerHTML = `<div class="split"><div class="card"><div class="card-head"><h2>Operations</h2></div><div class="card-body">
         ${cfg.operations.map((o) => `<div class="op-row">${method(o.method)}<div class="grow"><div class="path">${esc(o.path)}</div><div class="small muted"><b>${esc(o.id)}</b> — ${esc(o.description || '')}</div>
-          <div class="small muted">inputs: ${Object.keys(o.input_schema.properties || {}).map((k) => `<code>${esc(k)}</code>`).join(' ') || '—'} · outputs: ${Object.keys(o.response.mapping || {}).map((k) => `<code>${esc(k)}</code>`).join(' ') || 'raw body'}</div></div>${badge(o.safety === 'destructive' ? 'critical' : o.safety === 'write' ? 'medium' : 'low', o.safety)}</div>`).join('')}
+          <div class="small muted">inputs: ${Object.keys(o.input_schema.properties || {}).map((k) => `<code>${esc(k)}</code>`).join(' ') || '—'} · outputs: ${o.ingest ? `<span class="badge accent">data source · ${esc(o.ingest.entity || 'event')}</span> every ${esc((o.ingest.schedule || {}).cron ? `cron ${o.ingest.schedule.cron}` : `${(o.ingest.schedule || {}).interval_minutes || 15} min`)}` : Object.keys(o.response.mapping || {}).map((k) => `<code>${esc(k)}</code>`).join(' ') || 'raw body'}</div></div>${badge(o.safety === 'destructive' ? 'critical' : o.safety === 'write' ? 'medium' : 'low', o.safety)}</div>`).join('')}
         </div></div>
         <div class="stack"><div class="card card-pad"><h2 style="margin-bottom:10px">Details</h2><dl class="kv">
           <dt>Slug</dt><dd class="mono">${esc(i.slug)}</dd><dt>Transport</dt><dd>${esc(cfg.transport)}</dd><dt>Auth</dt><dd><code>${esc(auth.type)}</code>${auth.scopes ? ` scopes: ${auth.scopes.map(esc).join(', ')}` : ''}</dd>
@@ -176,6 +180,8 @@ async function renderDetail({ el, params }) {
         return route();
       }
       const a = t.dataset.a;
+      if (a === 'discuss') return askAbout({ type: 'integration', id: i.id, label: i.name }, `Explain the ${i.name} integration and what I should do next.`);
+      if (a === 'guide') { const g = $('#guide', el); g.classList.toggle('collapsed'); try { localStorage.setItem('hedes-guide-collapsed', g.classList.contains('collapsed') ? '1' : '0'); } catch (x) { /* ignore */ } return; }
       t.disabled = true;
       if (a === 'tests') {
         const r = await api(`/integrations/${i.id}/tests`, { method: 'POST', body: { version_id: v.id } });
@@ -210,3 +216,58 @@ export function diffHtml(changes) {
     ${c.before !== undefined ? `<del>${s(c.before)}</del> ` : ''}${c.after !== undefined ? `<ins>${s(c.after)}</ins>` : ''}</div></div>`).join('');
 }
 
+
+function guideHtml(g) {
+  let collapsed = false;
+  try { collapsed = localStorage.getItem('hedes-guide-collapsed') === '1'; } catch (e) { /* ignore */ }
+  return `<div class="card guide ${collapsed ? 'collapsed' : ''}" id="guide"><div class="card-head"><h2>Setup guide</h2><span class="muted small">${g.current < g.steps.length ? `Next: ${esc(g.steps[g.current].title)}` : 'All steps complete'}</span>
+      <span class="spacer"></span><button class="btn sm ghost" data-a="guide">Show / hide</button></div>
+    <ol class="steps">${g.steps.map((s, i) => `<li class="${esc(s.state)}"><span class="num">${s.state === 'done' ? '✓' : i + 1}</span><div class="grow"><b>${esc(s.title)}</b><div class="small muted">${esc(s.detail)}</div>
+      ${s.state === 'current' && s.href ? `<a class="btn sm ${s.key === 'approve' ? '' : 'primary'}" href="${esc(s.href)}" style="margin-top:6px">${esc(s.action)}</a>${s.blocked ? `<span class="small muted" style="margin-left:8px">${esc(s.blocked)}</span>` : ''}` : ''}</div></li>`).join('')}</ol></div>`;
+}
+
+async function renderSources({ el }) {
+  const templates = await api('/source-templates');
+  let chosen = null;
+  const card = (t) => `<button class="tpl" data-tpl="${esc(t.id)}"><div class="row between"><b>${esc(t.title)}</b>${t.installed ? badge('ok', 'added') : ''}</div>
+    <div class="small muted">${esc(t.summary)}</div><div class="small" style="margin-top:8px"><span class="badge">${esc(t.category)}</span> <span class="badge">${esc(t.auth_type === 'none' ? 'no login' : t.auth_type)}</span>
+    ${[...new Set(t.operations.map((o) => o.pagination))].filter((p) => p !== 'none').map((p) => `<span class="badge">${esc(p)} paging</span>`).join(' ')}</div></button>`;
+  el.innerHTML = `<div class="page">
+    <div class="crumb"><a href="#/integrations">Integrations</a> / Add data source</div>
+    ${pageHead('db', 'Add a data source', 'Pick a real service. A form fills in the configuration, the platform validates and tests it, then an administrator approves it. No code is written and nothing is mocked.')}
+    <div class="tpl-grid">${templates.map(card).join('')}</div>
+    <div id="tpl-form"></div>
+    <p class="muted small" style="margin-top:14px">Need something else? <a class="link" href="#/integrations/new">Paste or import a configuration</a>, or <a class="link" href="#/studio/new">describe it to the AI</a>.</p></div>`;
+  const form = $('#tpl-form', el);
+  el.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-tpl]');
+    if (!b) return;
+    chosen = templates.find((t) => t.id === b.dataset.tpl);
+    el.querySelectorAll('[data-tpl]').forEach((x) => x.classList.toggle('on', x === b));
+    const c = chosen.credential;
+    form.innerHTML = `<div class="card card-pad" style="margin-top:16px"><div class="row between"><h2>${esc(chosen.title)}</h2><a class="link small" href="${esc(chosen.docs)}" target="_blank" rel="noopener">API docs ↗</a></div>
+      <p class="muted small" style="margin-top:4px">${esc(chosen.free_tier)}</p>
+      <h4 class="small muted">WHAT YOU GET</h4>${chosen.operations.map((o) => `<div class="op-row small"><span class="badge accent">${esc(o.entity)}</span><span class="grow"><b>${esc(o.id)}</b> — ${esc(o.description)}</span><span class="muted">${esc(o.pagination)} paging</span></div>`).join('')}
+      <h4 class="small muted" style="margin-top:14px">STEPS</h4><ol class="small guide-list">
+        ${(chosen.setup || []).map((s) => `<li>${esc(s)}</li>`).join('')}
+        <li>Press <b>Create draft</b> below. The platform validates it and runs the safe tests.</li>
+        ${c ? `<li>Connect the credential <code>${esc(c.name)}</code> (${esc(c.type)}): ${esc(c.how)}</li>` : ''}
+        <li>Submit for review; an administrator approves. The source then starts running on its schedule (see Data Sources).</li></ol>
+      ${(chosen.variables || []).length ? `<h4 class="small muted" style="margin-top:14px">YOUR DETAILS</h4><div class="grid-2">${chosen.variables.map((v) => `<div class="field"><label>${esc(v.label)}</label>
+        <input type="text" data-var="${esc(v.name)}" value="${esc(v.default || '')}" placeholder="${esc(v.placeholder || '')}"><div class="hint">${esc(v.help || '')}</div></div>`).join('')}</div>` : ''}
+      <div class="row end"><button class="btn" id="tpl-ask">${icon('spark', 14)} Ask the AI about this</button><button class="btn primary" id="tpl-create">Create draft</button></div></div>`;
+    form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+  el.addEventListener('click', async (e) => {
+    if (e.target.closest('#tpl-ask')) return window.dispatchEvent(new CustomEvent('hedes:ask', { detail: { text: `Explain the ${chosen.title} data source: what it pulls, what credential I need and how to set it up.` } }));
+    const b = e.target.closest('#tpl-create');
+    if (!b) return;
+    const variables = Object.fromEntries([...el.querySelectorAll('[data-var]')].map((i) => [i.dataset.var, i.value.trim()]));
+    b.disabled = true;
+    try {
+      const r = await api(`/source-templates/${chosen.id}/create`, { method: 'POST', body: { variables } });
+      toast(r.validation.valid ? `Draft created${r.tests ? ` · tests ${r.tests.result}` : ''}` : 'Created with validation errors', r.validation.valid ? 'ok' : 'bad');
+      go(`#/integrations/${r.integration.id}`);
+    } catch (err) { toast(err.message, 'bad'); b.disabled = false; }
+  });
+}

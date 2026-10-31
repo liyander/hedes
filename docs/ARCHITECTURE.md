@@ -97,3 +97,17 @@ scheduler (15 s tick) -> IngestSource (interval, high-water mark, health)
   classified error and a suggested fix), paused, pending.
 * **Credentials**: optional expiry and rotation age; expired secrets are never used, and alerts fire a week before
   expiry and after the org's rotation period (default 90 days).
+
+## Entities, templates, assistant
+
+* **Entities.** `ingest.entity` selects the common shape: `event` (append-only, de-duplicated by `event_id`), `user` or
+  `device` (upserted by external id). Fields may be a JSONPath or `{path|paths, sep, default, transform, thresholds}`.
+* **Partial runs.** If a later page fails, the pages already fetched are stored, the run is `partial`, and the high-water
+  mark does not advance. Schedules accept an interval or a cron expression (`services/cron.py`).
+* **Templates** (`examples/sources/*.yaml`) carry a `template:` block (variables, credential, steps) beside the
+  configuration; `{{variable}}` placeholders are validated and filled when a draft is created.
+* **Assistant** (`services/assistant.py`): JSON-protocol tool use over the AI gateway (real providers only). Read-only tools
+  run in a bounded loop; write tools become `AssistantAction` rows that execute only on an interactive approval, with the
+  approving user's role, and are audited. Tagged items are summarised into the prompt; secrets never are. Help text is
+  shared with the UI (`services/help_content.py`).
+* **Alert delivery** (`services/notify.py`): alerts are queued on the session and delivered after commit from a thread.

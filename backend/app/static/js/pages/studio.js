@@ -1,5 +1,7 @@
 import { $, api, esc, icon, badge, md, json, ago, toast, readFile, riskBadge } from '../lib.js';
 import { connectModal } from './credentials.js';
+import { state } from '../app.js';
+import { modeBar, renderAssistantPage } from '../assistant.js';
 
 const STAGE_LABEL = {
   COLLECT_REQUIREMENTS: 'Collect requirements', DISCOVER_API: 'Discover API', DESIGN_INTEGRATION: 'Design integration',
@@ -17,6 +19,7 @@ let pollTimer = null;
 const tab = {};
 
 export async function render({ el, params }) {
+  if (!params[0]) return renderAssistantPage({ el });
   const sessions = await api('/ai/sessions');
   let sid = params[0];
   if (sid === 'new') {
@@ -28,8 +31,8 @@ export async function render({ el, params }) {
       sid = s.id;
     } else sid = null;
   }
-  el.innerHTML = `<div class="studio" id="studio">
-    <aside class="history"><div class="history-head"><b>Sessions</b><a class="btn sm ghost" href="#/studio">${icon('plus', 15)} New</a></div>
+  el.innerHTML = `${modeBar('build')}<div class="studio" id="studio">
+    <aside class="history"><div class="history-head"><b>Sessions</b><a class="btn sm ghost" href="#/studio/new">${icon('plus', 15)} New</a></div>
       ${sessions.length ? sessions.map((s) => `<a href="#/studio/${s.id}" class="${s.id === sid ? 'active' : ''}"><b>${esc(s.title)}</b><small>${ago(s.updated_at)} · ${s.messages} messages · ${esc(s.status)}</small></a>`).join('')
         : '<p class="muted small" style="padding:0 16px">No sessions yet.</p>'}</aside>
     <section class="chat"><div class="chat-log" id="log"></div>
@@ -37,7 +40,7 @@ export async function render({ el, params }) {
         <textarea id="msg" rows="2" placeholder="Describe what to connect, answer a question, or ask for a change…" aria-label="Message"></textarea>
         <div class="composer-foot">
           <label class="btn sm ghost" style="margin:0">${icon('upload', 15)} Upload OpenAPI<input type="file" id="file" accept=".json,.yaml,.yml" hidden></label>
-          <button type="button" class="btn sm ghost" id="sample">${icon('doc', 15)} Use sample TaskFlow API</button>
+          ${state.demo ? `<button type="button" class="btn sm ghost" id="sample">${icon('doc', 15)} Use sample TaskFlow API (demo)</button>` : ''}
           <span class="grow"></span>
           <button class="btn primary icon" id="send" aria-label="Send">${icon('send')}</button>
         </div></form>
@@ -167,7 +170,7 @@ export async function render({ el, params }) {
     if (f) await upload(f.name, await readFile(f));
     e.target.value = '';
   });
-  $('#sample', el).addEventListener('click', async () => {
+  $('#sample', el)?.addEventListener('click', async () => {
     const text = await (await fetch('/mock/taskflow/openapi.json')).text();
     await upload('taskflow-openapi.json', text);
   });

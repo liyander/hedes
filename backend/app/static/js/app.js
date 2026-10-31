@@ -1,6 +1,8 @@
 import { $, api, esc, icon, LOGO, toast, ago, ApiError } from './lib.js';
+import { installDrawer } from './assistant.js';
+import { syncHelpPage, toggleHelp } from './help.js';
 
-export const state = { user: null, cleanup: null, counts: { approvals: 0, alerts: 0 } };
+export const state = { user: null, cleanup: null, demo: false, page: 'dashboard', counts: { approvals: 0, alerts: 0 } };
 export const isAdmin = () => ['admin', 'owner'].includes(state.user?.role);
 export const isOwner = () => state.user?.role === 'owner';
 const roleName = (r) => ({ owner: 'Platform owner', admin: 'Admin', user: 'Builder' }[r] || r);
@@ -60,7 +62,8 @@ function shell() {
         <span class="top-title" id="top-title"></span>
         <span class="spacer"></span>
         <span class="live"><span class="dot on"></span>Live</span>
-        <a class="btn ghost" href="#/studio">${icon('spark', 16)} Build with AI</a>
+        <button class="btn ghost" id="help-btn" aria-label="About this page" title="About this page: usage and options">${icon('doc', 16)} Page guide</button>
+        <a class="btn ghost" href="#/studio">${icon('spark', 16)} AI Studio</a>
         <button class="btn ghost icon bell" id="bell" aria-label="Alerts">${icon('bell')}<span class="count" id="bell-count" hidden></span></button>
         <button class="btn ghost icon" data-act="theme" aria-label="Toggle theme">${icon('moon')}</button>
         <div class="pop alerts" id="alert-pop" hidden></div>
@@ -105,12 +108,13 @@ function renderAlerts() {
 
 function bindShell() {
   document.addEventListener('click', async (e) => {
-    const t = e.target.closest('[data-act], #user-btn, #bell, #collapse, [data-ack]');
+    const t = e.target.closest('[data-act], #user-btn, #bell, #collapse, [data-ack], #help-btn');
     const pop = $('#user-pop'), apop = $('#alert-pop');
     if (!e.target.closest('#user-pop, #user-btn') && pop) pop.hidden = true;
     if (!e.target.closest('#alert-pop, #bell') && apop) apop.hidden = true;
     if (!t) return;
-    if (t.id === 'user-btn') pop.hidden = !pop.hidden;
+    if (t.id === 'help-btn') toggleHelp(state.page || 'dashboard');
+    else if (t.id === 'user-btn') pop.hidden = !pop.hidden;
     else if (t.id === 'bell') { renderAlerts(); apop.hidden = !apop.hidden; }
     else if (t.id === 'collapse') {
       const sh = $('#shell');
@@ -136,20 +140,25 @@ export async function route() {
   if (!state.user || parts[0] === 'login') {
     if (state.user && parts[0] === 'login') return go('#/dashboard');
     clearInterval(counter);
+    document.querySelectorAll('#ask-ai, #assistant-drawer, #help-drawer').forEach((n) => n.remove());
     return (await import('./pages/login.js')).renderLogin(app);
   }
   if (!$('#shell')) {
     app.innerHTML = shell();
     if (!shellBound) { bindShell(); shellBound = true; }
     refreshCounts(); refreshAi();
+    try { state.demo = (await api('/demo/state')).demo === true; } catch (e) { state.demo = false; }
     clearInterval(counter);
     counter = setInterval(refreshCounts, 20000);
   }
   const key = ROUTES[parts[0]] ? parts[0] : 'dashboard';
+  state.page = key;
   document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === key));
   $('#top-title').textContent = ROUTES[key][1];
   document.title = `${ROUTES[key][1]} — H.E.D.E.S`;
   if (matchMedia('(max-width: 820px)').matches) $('#shell').classList.remove('open');
+  installDrawer();
+  syncHelpPage(key);
   // A fresh element per route, so listeners a page attaches never outlive it.
   const el = $('#content').cloneNode(false);
   $('#content').replaceWith(el);

@@ -34,28 +34,51 @@ Open http://127.0.0.1:8000. Three accounts are seeded (same password): **builder
 
 With Docker (PostgreSQL): `cp .env.example .env && docker compose up --build`.
 
-No AI key is needed: the built-in offline model implements every agent deterministically. Add OpenAI-compatible
-(OpenAI, NVIDIA, Groq, Ollama, LM Studio…), Anthropic or Gemini providers via `.env` or **AI Providers** (owner).
+The **AI assistant** (chat, `@` tagging, approval-gated actions) needs a real model: add OpenAI-compatible
+(OpenAI, NVIDIA, Groq, Ollama, LM Studio…), Anthropic or Gemini credentials via `.env` or **AI Providers** (owner).
+The guided *Build an integration* pipeline still falls back to a deterministic offline model so it works without a key.
+
+The product runs against **real services only**. The bundled mock APIs, sample integrations and demo buttons exist
+only when `DEMO_MODE=true` (used by the test suite and the demo script below).
 
 Tests: `cd backend && python -m pytest tests -q` (unit tests plus an end-to-end run of the demo against a live server).
 
-## Config-driven data sources (Okta, AWS CloudTrail, firewall)
+## Config-driven data sources (real APIs)
 
-Three connectors ship as pure configuration (`examples/okta.yaml`, `aws-cloudtrail.yaml`, `firewall.yaml`) and are
-installed and approved on first start, each against a bundled mock API that behaves like the real thing:
+*Integrations → Add data source* sets up a real service from a form. Each template is a YAML file in
+`examples/sources/`; you only supply your domain or organisation and a credential:
 
-| Source | Auth | Pagination | Timestamps | What it exercises |
-| --- | --- | --- | --- | --- |
-| Okta System Log | `ssws` token | `Link: rel="next"` header | ISO-8601 | severity/outcome value maps |
-| AWS CloudTrail | `aws_sigv4` (request signing) | `NextToken` in the body | epoch seconds | the mock verifies the signature |
-| Firewall logs | API key header | `offset` + `limit` | epoch milliseconds | malformed records, 429 + `Retry-After` |
+| Template | Data (common format) | Login | Paging |
+| --- | --- | --- | --- |
+| CISA Known Exploited Vulnerabilities | alerts | none | single page (CISA's GitHub mirror) |
+| GitHub organisation security | users, Dependabot alerts | personal access token | `Link` header |
+| Okta | users, System Log events | SSWS API token | `Link` header (cursor) |
+| Jira Cloud | users, issues | email + API token (Basic) | offset (`startAt`) and cursor (`nextPageToken`) |
+| NVD CVE database | alerts | none (optional key) | offset (`startIndex`) |
+| AbuseIPDB blacklist | alerts | API key header | none |
 
-Adding a fourth source means writing a YAML file: the login, the endpoint, the pagination style, the schedule and an
-`ingest.fields` mapping. Open **Data Sources** to see every connection's health, last/next run, records ingested and
-rejected, and credential age. *Simulate new data* adds fresh records so a re-run ingests only what is new;
-*Toggle firewall throttling* makes the firewall answer 429 so you can watch retries honour `Retry-After`.
+Every source lands in one of three common shapes (event/alert, user, device; each keeps `source`, `fetched_at` and the
+raw record), with per-field transforms, incremental sync, de-duplication, a dead-letter queue, retries with
+backoff/jitter and `Retry-After`, per-connector rate caps, interval **or cron** schedules and a health page.
+Users and devices are upserted; events are append-only. Secrets can be stored in the vault or read from the server's
+environment with `env:NAME`. Adding another source is writing a YAML file (or asking the assistant to draft one).
 
-## Demo script (≈5 minutes)
+Only the CISA feed is verified end to end against the live internet by the test suite; the others need your accounts, and
+are validated and exercised with the engine's request/response tests.
+
+**Alerts** can be pushed to Slack (incoming webhook) and/or email (SMTP) from *Settings → Alert delivery*; a source
+that fails N runs in a row (default 3) raises one.
+
+## AI assistant
+
+*AI Studio → Assistant* (and the **Ask AI** button on every page) answers questions about the platform and your own
+configuration. Type `@` to tag an integration, source, workflow or credential; it then reads that item's configuration,
+health and recent errors (never secrets). It runs read-only lookups itself; anything that changes data or calls an
+external API is shown as an **approval card** with the exact inputs and runs only when you approve, with your own
+permissions, audited. It cannot approve or publish integrations, reveal or rotate secrets, or change policy. Every
+page also has a hideable **Page guide** (usage, options, tips), and each integration shows a step-by-step setup guide.
+
+## Demo script (≈5 minutes, needs `DEMO_MODE=true`)
 
 1. **builder** → *AI Studio* → “I want to connect another task-management service and create tasks automatically.”
    The AI asks for documentation.

@@ -24,8 +24,8 @@ export async function render({ el }) {
     <div class="card card-pad">
       <div class="row between" style="margin-bottom:12px"><h2>How an integration goes live</h2><span class="muted small">AI plans · deterministic engine executes · humans approve</span></div>
       <div class="flow">
-        ${[['spark', 'Describe', 'Chat with the AI and upload API docs'], ['doc', 'Generate', 'Declarative config + tool schemas'],
-           ['shield', 'Validate & test', 'Schema, egress policy, mock tests'], ['check', 'Approve', 'An admin publishes the exact version'],
+        ${[['spark', 'Describe', 'Pick a template or chat with the AI'], ['doc', 'Generate', 'Declarative config + tool schemas'],
+           ['shield', 'Validate & test', 'Schema, egress policy, safe tests'], ['check', 'Approve', 'An admin publishes the exact version'],
            ['pulse', 'Run & heal', 'Monitored; drift gets repair proposals']].map(([i, t, d]) => `<div class="step">${icon(i, 20)}<b>${t}</b><span>${d}</span></div>`).join('')}
       </div>
     </div>

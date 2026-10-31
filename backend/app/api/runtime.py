@@ -257,7 +257,7 @@ def _demo_only() -> None:
 
 @router.get("/demo/state")
 def demo_state(p: Principal = Depends(current_principal)):
-    return mock.snapshot() if get_settings().demo_mode else {"demo": False}
+    return {"demo": True, **mock.snapshot()} if get_settings().demo_mode else {"demo": False}
 
 
 class FeedIn(BaseModel):
