@@ -327,6 +327,22 @@
                 "type": "string"
               }
             },
+            "success": {
+              "description": "For APIs that answer HTTP 200 even when the call failed (Slack: {\"ok\": false, \"error\": ...}).",
+              "type": "object",
+              "required": ["path", "equals"],
+              "additionalProperties": false,
+              "properties": {
+                "path": { "type": "string" },
+                "equals": {},
+                "error_path": { "type": "string" },
+                "detail_paths": { "type": "array", "items": { "type": "string" }, "maxItems": 5 },
+                "error_classes": {
+                  "type": "object",
+                  "additionalProperties": { "enum": ["auth_invalid", "forbidden", "not_found", "rate_limited", "upstream_error", "request_rejected"] }
+                }
+              }
+            },
             "max_bytes": {
               "type": "integer",
               "minimum": 1000,
@@ -517,6 +533,16 @@
                 "end_param": {
                   "type": "string",
                   "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+                },
+                "initial_lookback_days": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3650
+                },
+                "max_window_days": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3650
                 }
               }
             },

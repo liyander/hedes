@@ -17,14 +17,14 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..core.db import session_scope, utcnow
+from ..core.db import new_id, session_scope, utcnow
 from ..models import AIMessage, AISession, Integration, IntegrationVersion, Tool, User, Workflow, WorkflowVersion
-from . import agents, audit, integrations
+from . import agents, audit, catalog, docs_search, integrations, openapi
 from .ai_gateway import Gateway, ProviderError
 
 log = logging.getLogger("integra.orchestrator")
 STAGES = ["COLLECT_REQUIREMENTS", "DISCOVER_API", "DESIGN_INTEGRATION", "GENERATE_CONFIGURATION", "VALIDATE_CONFIGURATION",
-          "SECURITY_EVALUATION", "RUN_SAFE_TESTS", "AWAIT_ADMIN_APPROVAL", "PUBLISHED"]
+          "RESEARCH_SETUP", "SECURITY_EVALUATION", "RUN_SAFE_TESTS", "AWAIT_ADMIN_APPROVAL", "PUBLISHED"]
 _running: set[str] = set()
 _lock = threading.Lock()
 
@@ -60,12 +60,108 @@ def handle_message(db: Session, s: AISession, text: str) -> AIMessage:
     return refresh_requirements(db, s)
 
 
+def _note_source(s: AISession, label: str, url: str, kind: str) -> None:
+    state = dict(s.state or {})
+    sources = [x for x in state.get("sources") or [] if x.get("url") != url or not url]
+    sources.append({"label": label, "url": url, "kind": kind})
+    state["sources"] = sources
+    s.state = state
+
+
+def _add_document(s: AISession, catalog: dict, name: str, url: str, origin: str, alias: str = "") -> None:
+    docs = [d for d in (s.documents or []) if openapi.slugify(d["catalog"]["title"]) != openapi.slugify(catalog["title"])]
+    docs.append({"id": new_id(), "name": name, "kind": "openapi", "catalog": catalog, "url": url, "origin": origin,
+                 "aliases": [alias] if alias else []})
+    s.documents = docs
+
+
+def _find_documentation(db: Session, s: AISession, req: dict, latest: str) -> list[str]:
+    """Import OpenAPI documents linked in the latest message, and search the public directory for services that have no
+    documentation yet. Returns notes for the user. Each service is searched once per session."""
+    notes: list[str] = []
+    state = dict(s.state or {})
+    searched = dict(state.get("doc_search") or {})
+    for url in docs_search.spec_urls_in(latest)[:3]:
+        if any(d.get("url") == url for d in s.documents or []):
+            continue
+        try:
+            cat = docs_search.fetch_spec(url, latest)
+        except docs_search.DocsError as e:
+            notes.append(f"I couldn't use the document at {url}: {e}")
+            continue
+        _add_document(s, cat, url.rsplit("/", 1)[-1] or url, url, "link")
+        _note_source(s, f"{cat['title']} OpenAPI document (link you provided)", url, "document")
+        notes.append(f"I read the API documentation you linked: **{cat['title']}**, {len(cat['operations'])} operations.")
+    for name in req.get("unknown_services") or []:
+        if name.lower() in searched:
+            continue
+        try:
+            hits = docs_search.search(name)
+        except docs_search.DocsError as e:
+            searched[name.lower()] = {"status": "error", "message": str(e)}
+            notes.append(f"I couldn't search online for {name} documentation ({e}).")
+            continue
+        usable = [h for h in hits if h["openapi_version"].startswith("3") and h["spec_url"]]
+        if not usable:
+            status = "unsupported" if hits else "not_found"
+            searched[name.lower()] = {"status": status, "hits": [h["key"] for h in hits]}
+            notes.append(f"I searched the {docs_search.DIRECTORY_NAME} for {name}: " +
+                         ("it only has a Swagger 2.0 document, which I can't read yet." if hits else "no API documentation was listed."))
+            continue
+        best = usable[0]
+        try:
+            cat = docs_search.fetch_spec(best["spec_url"], latest)
+        except docs_search.DocsError as e:
+            searched[name.lower()] = {"status": "error", "message": str(e)}
+            notes.append(f"I found {name} in the {docs_search.DIRECTORY_NAME} but couldn't read it: {e}")
+            continue
+        _add_document(s, cat, f"{best['key']} (online)", best["spec_url"], "online", alias=name)
+        _note_source(s, f"{best['title']} - OpenAPI document from the {docs_search.DIRECTORY_NAME}", best["spec_url"], "document")
+        if best.get("docs_url"):
+            _note_source(s, f"{best['title']} - original specification", best["docs_url"], "reference")
+        searched[name.lower()] = {"status": "found", "url": best["spec_url"]}
+        others = ", ".join(h["key"] for h in usable[1:4])
+        notes.append(f"I found the **{best['title']}** API documentation online ({len(cat['operations'])} operations"
+                     + (f", trimmed from {cat['trimmed_from']} to the most relevant" if cat.get("trimmed_from") else "")
+                     + f") at {best['spec_url']}." + (f" Other matches: {others} - tell me if you meant one of those." if others else ""))
+    state = dict(s.state or {})
+    state["doc_search"] = searched
+    s.state = state
+    return notes
+
+
+def _tailor_missing(s: AISession, req: dict) -> None:
+    """Explain what was already tried for services whose documentation could not be found."""
+    searched = (s.state or {}).get("doc_search") or {}
+    out = []
+    for q in req.get("missing") or []:
+        name = next((n for n in req.get("unknown_services") or [] if f"documentation for {n}" in q), None)
+        result = searched.get(name.lower()) if name else None
+        if result and result["status"] != "found":
+            q = (f"I couldn't find usable API documentation for {name} online"
+                 + (" (only a Swagger 2.0 version is listed)" if result["status"] == "unsupported" else "")
+                 + ". Paste a link to its OpenAPI/Swagger document or upload the file (JSON or YAML).")
+        out.append(q)
+    req["missing"] = out
+    req["missing_help"] = [{"question": q, "how": catalog.how_to_find(q)} for q in out]
+    req["ready"] = bool(req["services"]) and not out
+
+
 def refresh_requirements(db: Session, s: AISession) -> AIMessage:
     msgs = [{"role": m.role, "content": m.content} for m in
             db.scalars(select(AIMessage).where(AIMessage.session_id == s.id).order_by(AIMessage.created_at)).all() if m.role != "system"]
     gw = Gateway(db, s.organization_id)
+    latest = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
     try:
         req, model = agents.analyze_request(gw, msgs, s.documents or [], s.requirements or {})
+        notes = _find_documentation(db, s, req, latest)
+        if any(n.startswith(("I found", "I read")) for n in notes):  # new documentation: re-read the request against it
+            req, model = agents.analyze_request(gw, msgs, s.documents or [], s.requirements or {})
+        _tailor_missing(s, req)
+        if notes or req["missing"]:
+            req["reply"] = "\n".join(notes + ([""] if notes else []) + [agents.compose_reply(req)])
+        if gw.fallback_note():
+            req["reply"] = gw.fallback_note() + "\n\n" + req["reply"]
     except ProviderError as e:
         _set(db, s, "COLLECT_REQUIREMENTS", "failed", str(e))
         msg = AIMessage(session_id=s.id, role="assistant", content=f"I couldn't reach any AI model: {e}", meta={"error": True})
@@ -171,6 +267,20 @@ def run_pipeline(db: Session, s: AISession, from_stage: str | None = None) -> No
         return
     _set(db, s, "VALIDATE_CONFIGURATION", "done", "All configurations match the integration schema")
 
+    # RESEARCH_SETUP: what the person must do in each vendor's product, read from the vendor's own documentation.
+    _set(db, s, "RESEARCH_SETUP", "running", "Reading the vendors' reference pages")
+    guides, read_total = dict(_out(s, "setup_guides") or {}), 0
+    for c in created:
+        v = db.get(IntegrationVersion, c["version_id"])
+        guide, model = agents.setup_guide(gw, c["slug"], v.config, s.documents or [])
+        guides[c["slug"]] = {**guide, "model": model}
+        for url in guide["sources"]:
+            _note_source(s, f"{v.config['integration']['name']} - official reference page (setup requirements)", url, "reference")
+        read_total += len(guide["sources"])
+    _out(s, "setup_guides", guides)
+    db.commit()
+    _set(db, s, "RESEARCH_SETUP", "done", f"Setup checklist from {read_total} vendor documentation page(s)", model=model if created else "")
+
     # SECURITY_EVALUATION
     _set(db, s, "SECURITY_EVALUATION", "running")
     blocking, summaries, model = [], [], ""
@@ -225,14 +335,31 @@ def run_pipeline(db: Session, s: AISession, from_stage: str | None = None) -> No
 
     s.status = "ready"
     db.commit()
-    lines = ["Done. I generated, validated, security-checked and tested:"]
+    lines = ([gw.fallback_note(), ""] if gw.fallback_note() else []) + ["Done. I generated, validated, security-checked and tested:"]
     for c in created:
         v = db.get(IntegrationVersion, c["version_id"])
         lines.append(f"- **{c['slug']}** {c['version']} - risk {v.security_report['level']}, tests passed, submitted for approval")
     lines.append("\nNext: connect the credentials (they go to the vault, never to me), then an administrator reviews and publishes.")
+    for c in created:
+        v = db.get(IntegrationVersion, c["version_id"])
+        auth = v.config["integration"]["authentication"]
+        if auth["type"] != "none":
+            lines.append(f"- **{c['slug']}** needs a credential named `{auth.get('credential_ref')}`. Where to get it: {catalog.credential_help(c['slug'], auth['type'])}")
+        guide = (_out(s, "setup_guides") or {}).get(c["slug"])
+        if guide and (guide["permissions"] or guide["steps"] or guide["common_errors"]):
+            lines.append(f"\n**Before {c['slug']} works, in {v.config['integration']['name']}:**")
+            if guide["permissions"]:
+                lines.append(f"- Required scopes/permissions: {', '.join(f'`{x}`' for x in guide['permissions'])}")
+            lines += [f"- {x}" for x in guide["steps"] + guide.get("prerequisites", [])]
+            if guide["common_errors"]:
+                lines.append("- If it fails: " + "; ".join(f"`{e['code']}` - {e['fix']}" for e in guide["common_errors"][:5]))
     wf = _out(s, "workflow")
     if wf:
         lines.append(f"I also drafted a workflow, **{wf['name']}** - you can review it in Workflows once the integrations are published.")
+    sources = sources_referred(db, s)
+    if sources:
+        lines.append("\n**Sources referred:**")
+        lines += [f"- {x['label']}" + (f": {x['url']}" if x.get("url") else "") for x in sources]
     _say(db, s, "\n".join(lines), stage="AWAIT_ADMIN_APPROVAL")
 
 
@@ -263,6 +390,61 @@ def _plan_workflow(db: Session, s: AISession, gw: Gateway, user, req: dict) -> N
     db.commit()
 
 
+def creation_plan(db: Session, s: AISession) -> dict:
+    """What generating will write to the database, shown to the user for confirmation before anything is created.
+    ``fingerprint`` identifies this exact plan, so a confirmation cannot be replayed after the requirements change."""
+    import hashlib
+    import json
+    req = s.requirements or {}
+    items: list[dict] = []
+    for svc in req.get("services") or []:
+        existing = db.scalars(select(Integration).where(Integration.organization_id == s.organization_id, Integration.slug == svc["slug"])).first()
+        ops = [o.get("operation_id") or o["action"] for o in req.get("operations") or [] if o["service"] == svc["slug"]]
+        try:
+            draft, _ = agents._draft_for_service(svc, req, s.documents or [])
+        except Exception:  # noqa: BLE001 - the plan is informational; generation reports real errors
+            draft = None
+        auth = ((draft or {}).get("integration") or {}).get("authentication") or {}
+        items.append({
+            "service": svc["name"], "slug": svc["slug"],
+            "record": "new version of the existing integration" if existing else "new integration",
+            "tables": ["integration_versions", "test_runs", "approval_requests"] + ([] if existing else ["integrations"]),
+            "operations": ops, "auth_type": auth.get("type", "unknown"), "credential_ref": auth.get("credential_ref"),
+            "credential_help": catalog.credential_help(svc["slug"], auth.get("type")),
+        })
+    plan = {"items": items, "workflow": bool(req.get("triggers")),
+            "notes": ["Nothing becomes executable yet: tools are created only after an administrator approves the exact version.",
+                      "No credentials are created; you connect them yourself in Credentials."]}
+    if plan["workflow"]:
+        plan["notes"].insert(0, "A draft workflow (workflows, workflow_versions) is created for the trigger you described; it stays inactive.")
+    plan["fingerprint"] = hashlib.sha256(json.dumps([items, plan["workflow"]], sort_keys=True, default=str).encode()).hexdigest()[:16]
+    return plan
+
+
+def sources_referred(db: Session, s: AISession) -> list[dict]:
+    """Every source the build drew on: documents (uploaded, linked, found online), built-in references, model knowledge."""
+    out = list((s.state or {}).get("sources") or [])
+    seen = {x.get("url") or x["label"] for x in out}
+
+    def add(label: str, url: str, kind: str) -> None:
+        if (url or label) not in seen:
+            seen.add(url or label)
+            out.append({"label": label, "url": url, "kind": kind})
+
+    for d in s.documents or []:
+        if d.get("origin") in (None, "upload"):
+            add(f"{d['catalog']['title']} OpenAPI document (uploaded file {d['name']})", "", "document")
+    for svc in (s.requirements or {}).get("services") or []:
+        if svc.get("source") == "catalog":
+            add(f"{svc['name']} - built-in reference configuration (examples/{svc['slug']}.yaml)", "", "reference")
+            guide = catalog.SERVICE_GUIDES.get(svc["slug"])
+            if guide:
+                add(f"{svc['name']} official API documentation", guide["docs"], "reference")
+        elif svc.get("source") == "model_knowledge":
+            add(f"{svc['name']} - AI model knowledge (not verified against documentation)", "", "model")
+    return out
+
+
 def session_view(db: Session, s: AISession) -> dict:
     """Session state for the UI, with live statuses of the generated integrations."""
     outputs = (s.state or {}).get("outputs") or {}
@@ -280,7 +462,9 @@ def session_view(db: Session, s: AISession) -> dict:
                       "tests": tr.report if tr else None, "approval_id": c.get("approval_id"),
                       "credential_ref": v.config["integration"]["authentication"].get("credential_ref"),
                       "auth_type": v.config["integration"]["authentication"]["type"],
-                      "credential_connected": (conns.get(v.config["integration"]["authentication"].get("credential_ref")) or {}).get("status") == "active"})
+                      "credential_connected": (conns.get(v.config["integration"]["authentication"].get("credential_ref")) or {}).get("status") == "active",
+                      "credential_help": catalog.credential_help(integ.slug, v.config["integration"]["authentication"]["type"]),
+                      "setup": (outputs.get("setup_guides") or {}).get(integ.slug)})
     stages = dict((s.state or {}).get("stages") or {})
     if items and all(i["version_status"] == "published" for i in items):
         stages["AWAIT_ADMIN_APPROVAL"] = {**stages.get("AWAIT_ADMIN_APPROVAL", {}), "status": "done", "detail": "Approved"}
@@ -295,6 +479,6 @@ def session_view(db: Session, s: AISession) -> dict:
             "requirements": s.requirements, "stages": stages, "stage_order": STAGES,
             "documents": [{"id": d["id"], "name": d["name"], "title": d["catalog"]["title"],
                            "operations": len(d["catalog"]["operations"]), "base_url": d["catalog"].get("base_url")} for d in s.documents or []],
-            "integrations": items, "workflow": outputs.get("workflow"),
+            "integrations": items, "workflow": outputs.get("workflow"), "sources": sources_referred(db, s),
             "messages": [{"id": m.id, "role": m.role, "content": m.content, "meta": m.meta, "created_at": m.created_at.isoformat()} for m in msgs],
             "created_at": s.created_at.isoformat(), "updated_at": s.updated_at.isoformat() if s.updated_at else None}

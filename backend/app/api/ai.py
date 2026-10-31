@@ -91,7 +91,7 @@ def upload_document(sid: str, body: DocumentIn, p: Principal = Depends(require_r
     except openapi.OpenAPIError as e:
         raise HTTPException(422, f"Could not import {body.name}: {e}")
     docs = [d for d in (s.documents or []) if openapi.slugify(d["catalog"]["title"]) != openapi.slugify(cat["title"])]
-    docs.append({"id": new_id(), "name": body.name, "kind": "openapi", "catalog": cat})
+    docs.append({"id": new_id(), "name": body.name, "kind": "openapi", "catalog": cat, "origin": "upload"})
     s.documents = docs
     db.add(AIMessage(session_id=s.id, role="system", content=f"Uploaded {body.name}: {cat['title']} with {len(cat['operations'])} operations.",
                      meta={"document": cat["title"]}))
@@ -102,6 +102,16 @@ def upload_document(sid: str, body: DocumentIn, p: Principal = Depends(require_r
 
 class GenerateIn(BaseModel):
     from_stage: str | None = None
+    confirm: str = ""  # the fingerprint of the creation plan the user approved
+
+
+@router.get("/sessions/{sid}/plan")
+def creation_plan(sid: str, p: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+    """What generating would create in the database. Shown to the user, who must confirm it before anything is written."""
+    s = _session(db, p, sid)
+    if not (s.requirements or {}).get("ready"):
+        raise HTTPException(409, "Answer the open questions before generating")
+    return orchestrator.creation_plan(db, s)
 
 
 @router.post("/sessions/{sid}/generate")
@@ -109,6 +119,10 @@ def generate(sid: str, body: GenerateIn, p: Principal = Depends(require_role("us
     s = _session(db, p, sid)
     if not (s.requirements or {}).get("ready"):
         raise HTTPException(409, "Answer the open questions before generating")
+    plan = orchestrator.creation_plan(db, s)
+    if body.confirm != plan["fingerprint"]:
+        raise HTTPException(409, "Review and confirm what will be created first (GET the plan, then send its fingerprint as confirm)")
+    audit.record(db, p.org_id, p, "ai.generate.confirmed", s.title, plan=[i["slug"] for i in plan["items"]], workflow=plan["workflow"])
     orchestrator.start(s.id, body.from_stage)
     s.status = "running"
     db.commit()
@@ -117,10 +131,9 @@ def generate(sid: str, body: GenerateIn, p: Principal = Depends(require_role("us
 
 @router.post("/sessions/{sid}/revise")
 def revise(sid: str, body: MessageIn, p: Principal = Depends(require_role("user")), db: Session = Depends(get_db)):
+    """Update the requirements; generating again needs a fresh confirmation of the (changed) plan."""
     s = _session(db, p, sid)
     orchestrator.handle_message(db, s, body.content)
-    if (s.requirements or {}).get("ready"):
-        orchestrator.start(s.id, None)
     return orchestrator.session_view(db, s)
 
 

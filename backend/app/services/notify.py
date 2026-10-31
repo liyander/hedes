@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from ..core.config import get_settings
 from ..core.db import session_scope
 from ..models import Organization
-from . import egress, vault
+from . import egress, email_templates, vault
 
 log = logging.getLogger("integra.notify")
 RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -79,7 +79,7 @@ def _slack(db: Session, org: Organization, cfg: dict, text: str) -> None:
         raise RuntimeError(f"Slack answered HTTP {r.status_code}")
 
 
-def _email(db: Session, org: Organization, cfg: dict, subject: str, text: str) -> None:
+def _email(db: Session, org: Organization, cfg: dict, subject: str, text: str, html: str | None = None) -> None:
     e = cfg.get("email") or {}
     if not (e.get("host") and e.get("to") and e.get("from")):
         raise RuntimeError("Email is not fully configured (host, from and to are required)")
@@ -87,6 +87,8 @@ def _email(db: Session, org: Organization, cfg: dict, subject: str, text: str) -
     msg = EmailMessage()
     msg["Subject"], msg["From"], msg["To"] = subject[:200], e["from"], ", ".join(e["to"])
     msg.set_content(text)
+    if html:
+        msg.add_alternative(html, subtype="html")  # multipart/alternative: mail apps show the HTML, others the text
     security, port = e.get("security", "starttls"), int(e.get("port") or 587)
     ctx = ssl.create_default_context()
     if security == "ssl":
@@ -107,19 +109,20 @@ def _email(db: Session, org: Organization, cfg: dict, subject: str, text: str) -
         smtp.send_message(msg)
 
 
-def send(db: Session, org: Organization, subject: str, text: str, channels: tuple[str, ...] = ("slack", "email")) -> dict:
+def send(db: Session, org: Organization, subject: str, text: str, channels: tuple[str, ...] = ("slack", "email"),
+         html: str | None = None, slack_text: str | None = None) -> dict:
     """Deliver to every configured channel. Returns {channel: 'sent' | error text} (used by the Settings test button)."""
     cfg = config_of(org)
     results: dict[str, str] = {}
     if "slack" in channels and cfg.get("slack_secret_ref"):
         try:
-            _slack(db, org, cfg, f"*{subject}*\n{text}")
+            _slack(db, org, cfg, f"*{subject}*\n{slack_text if slack_text is not None else text}")
             results["slack"] = "sent"
         except Exception as e:  # noqa: BLE001 - report any delivery problem to the caller
             results["slack"] = f"{type(e).__name__}: {str(e)[:200]}"
     if "email" in channels and (cfg.get("email") or {}).get("host"):
         try:
-            _email(db, org, cfg, subject, text)
+            _email(db, org, cfg, subject, text, html)
             results["email"] = "sent"
         except Exception as e:  # noqa: BLE001
             results["email"] = f"{type(e).__name__}: {str(e)[:200]}"
@@ -139,8 +142,11 @@ def _dispatch(alerts: list[dict]) -> None:
                     if time.monotonic() - _RECENT.get(key, -1e9) < DEDUPE_SECONDS:
                         continue
                     _RECENT[key] = time.monotonic()
-                link = f"{get_settings().public_base_url.rstrip('/')}/{a['link']}" if a.get("link") else ""
-                res = send(db, org, f"[H.E.D.E.S] {a['severity'].upper()}: {a['kind']}", a["message"] + (f"\n{link}" if link else ""))
+                base = get_settings().public_base_url.rstrip("/")
+                link = f"{base}/{a['link']}" if a.get("link") else base
+                mail = email_templates.render(email_templates.template_for(a["kind"]), kind=a["kind"], severity=a["severity"], message=a["message"],
+                                              organization=org.name, link=link, overrides=cfg.get("templates"))
+                res = send(db, org, mail["subject"], mail["text"], html=mail["html"], slack_text=f"{a['message']}\n{link}")
                 for channel, outcome in res.items():
                     if outcome != "sent":
                         log.warning("alert delivery via %s failed: %s", channel, outcome)

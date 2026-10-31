@@ -33,6 +33,8 @@ def after_execution(db: Session, ex: Execution, integ: Integration) -> bool:
     """Raise alerts for failures. Returns True when an automatic repair proposal should be prepared."""
     if ex.status == "succeeded":
         return False
+    from . import healing
+    healing.on_failure(db, ex, integ)  # no-op unless self-healing is enabled; investigates after this transaction commits
     cls = ex.error_class
     if cls in ("auth_invalid", "forbidden", "credential_missing") and not _recent_alert(db, ex.organization_id, cls, integ.id):
         audit.alert(db, ex.organization_id, cls, f"{integ.name}: {ERROR_GUIDE[cls][0]} {ERROR_GUIDE[cls][1]}", "high", integ.id, "#/credentials")

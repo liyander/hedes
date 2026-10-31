@@ -96,3 +96,86 @@ def build_from_template(template_id: str, variables: dict) -> dict:
 
 def needs_base_url(config: dict) -> bool:
     return "your-domain" in config["integration"]["base_url"]
+
+
+# Official documentation and where to get a credential, for the services the platform ships reference configurations for.
+SERVICE_GUIDES = {
+    "github": {"docs": "https://docs.github.com/en/rest",
+               "credential": "GitHub > your avatar > Settings > Developer settings > Personal access tokens > Fine-grained tokens. "
+                             "Give it access to the repositories and the Issues permission it needs.",
+               "operations": {"create_issue": "https://docs.github.com/en/rest/issues/issues#create-an-issue",
+                              "list_issues": "https://docs.github.com/en/rest/issues/issues#list-repository-issues",
+                              "add_comment": "https://docs.github.com/en/rest/issues/comments#create-an-issue-comment"},
+               "setup": ["Create a fine-grained personal access token and select the repositories it may use.",
+                         "Repository permissions: Issues - Read and write (read-only is enough for listing).",
+                         "If the organisation requires approval for fine-grained tokens, an organisation owner must approve it."],
+               "errors": [("401 Bad credentials", "The token is wrong, expired or revoked.", "Create a new token and rotate it in Credentials."),
+                          ("403 Resource not accessible by personal access token", "The token lacks the Issues permission or the repository.",
+                           "Edit the token: add the repository and Issues - Read and write."),
+                          ("404 Not Found", "The repository is private and the token cannot see it, or owner/repo is misspelled.",
+                           "Check owner/repo and the token's repository access.")]},
+    "slack": {"docs": "https://api.slack.com/methods",
+              "credential": "api.slack.com/apps > your app > OAuth & Permissions: add the chat:write scope, install the app and copy the Bot User OAuth Token (xoxb-…).",
+              "operations": {"post_message": "https://api.slack.com/methods/chat.postMessage",
+                             "list_channels": "https://api.slack.com/methods/conversations.list"},
+              "setup": ["Create a Slack app at api.slack.com/apps (From scratch) in your workspace.",
+                        "OAuth & Permissions > Bot Token Scopes: add chat:write (and channels:read to list channels). Add chat:write.public "
+                        "to post in public channels without inviting the app.",
+                        "Install (or Reinstall) to Workspace after changing scopes, then copy the Bot User OAuth Token. It starts with xoxb-; "
+                        "user (xoxp-) and app-level (xapp-) tokens do not work here.",
+                        "Invite the app to each channel it posts to: type /invite @your-app in the channel."],
+              "errors": [("missing_scope", "The token does not have the scope the method needs (the response lists needed and provided).",
+                          "Add the scope under Bot Token Scopes, reinstall the app and rotate the token."),
+                         ("not_in_channel", "The app is not a member of the channel.", "Invite it with /invite @your-app, or add chat:write.public."),
+                         ("channel_not_found", "The channel name or ID is wrong, or the app cannot see a private channel.",
+                          "Use the channel ID (channel details > About) and invite the app."),
+                         ("invalid_auth / not_authed", "The token is wrong, revoked or missing.", "Copy the Bot User OAuth Token again and rotate it.")]},
+    "jira": {"docs": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/",
+             "credential": "id.atlassian.com/manage-profile/security/api-tokens > Create API token. The username is your Atlassian account email.",
+             "operations": {"create_issue": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-post",
+                            "get_issue": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-issueidorkey-get"},
+             "setup": ["Create an API token at id.atlassian.com > Security > API tokens. Use your Atlassian account email as the username.",
+                       "The account needs the Browse projects and Create issues permissions in the target project.",
+                       "Use the project key (the prefix of issue numbers, e.g. SEC) and an issue type that exists in that project."],
+             "errors": [("401 Unauthorized", "Wrong email or API token (a password does not work).", "Create a new API token and rotate it."),
+                        ("400 issuetype / project errors", "The project key or issue type does not exist, or a required field is missing.",
+                         "Check the project key and issue type in Jira's project settings.")]},
+}
+
+AUTH_GUIDE = {
+    "bearer": "an API token (bearer token). Look for 'API tokens', 'Personal access tokens' or 'Developer settings' in the service's account settings.",
+    "api_key_header": "an API key. Look for 'API keys' in the service's account, developer or admin settings.",
+    "api_key_query": "an API key. Look for 'API keys' in the service's account, developer or admin settings.",
+    "basic": "a username (often your email) and a password or API token. Many services issue an API token to use instead of your password.",
+    "ssws": "an Okta API token: Okta Admin Console > Security > API > Tokens > Create token.",
+    "oauth2_client_credentials": "a client ID and client secret from an OAuth app (often under 'Apps', 'Integrations' or 'API clients' in the admin console).",
+    "aws_sigv4": "an AWS access key pair for an IAM user or role with permission for this API (IAM console > Users > Security credentials).",
+}
+
+
+def credential_help(slug: str, auth_type: str) -> str:
+    if auth_type in (None, "", "none"):
+        return "No credential is needed."
+    specific = (SERVICE_GUIDES.get(slug) or {}).get("credential")
+    return specific or f"You need {AUTH_GUIDE.get(auth_type, 'the credential the API documentation describes.')}"
+
+
+def how_to_find(question: str) -> str:
+    """Where a user finds the answer to one of the AI Studio's open questions."""
+    q = question.lower()
+    if "jira" in q and "url" in q:
+        return "It is the address you open Jira at in your browser, e.g. https://yourcompany.atlassian.net - look at the address bar on any Jira page."
+    if "base url" in q or "server url" in q:
+        return ("The API documentation lists it under 'Base URL', 'Servers', 'Endpoint' or 'Host' (for example https://api.vendor.com/v1). "
+                "It is usually not the same as the website address.")
+    if "documentation" in q or "openapi" in q:
+        return ("On the vendor's developer site (often developer.<vendor>.com or docs.<vendor>.com) look for 'API reference' and a download "
+                "called OpenAPI, Swagger, openapi.json or openapi.yaml. Paste that link here or upload the file. Without a link I search the public "
+                "APIs.guru directory automatically.")
+    if "which application" in q or "which api" in q:
+        return "Name the product you use (for example GitHub, Jira, Slack, Stripe) or paste a link to its API documentation."
+    if "channel" in q:
+        return "Open the channel in Slack: its name is shown at the top (for example #security)."
+    if "project" in q:
+        return "In Jira the project key is the prefix of every issue number (for example SEC in SEC-123)."
+    return "Check the service's API documentation or account settings, or ask the person who administers that service."

@@ -31,7 +31,7 @@ PAGES = {
         "summary": "Talk to the AI. Ask questions, tag things you want it to look at, and let it act for you - with your approval first.",
         "steps": ["Type @ and pick an integration, source, workflow or credential to give the AI that context.", "Ask in plain language: 'why is my Okta source failing?', 'explain pagination', 'run the CISA feed now'.", "When the AI proposes an action you see a card with the exact action and its inputs. Approve or reject it; nothing runs before you decide.", "Use 'Build an integration' to have the AI draft a configuration from your description or API docs."],
         "options": [{"name": "@ tags", "text": "Tagged items are read by the AI (configuration, health, recent errors, mapping) before it answers. Secrets are never included."}, {"name": "Approval cards", "text": "Every action that changes something or calls an external service waits for your approval. Read-only lookups run automatically and are shown as 'looked up'."}, {"name": "Threads", "text": "Conversations are saved; reopen one from the list."}, {"name": "Build an integration", "text": "The guided pipeline: requirements, API discovery, configuration, validation, security review, tests, submit."}],
-        "tips": ["The AI cannot approve or publish integrations, rotate secrets or change policy - those stay with administrators.", "An AI provider must be configured under AI Providers; there is no fake offline answer."],
+        "tips": ["If I lack documentation for a service, I search the public APIs.guru OpenAPI directory, or read a documentation link you paste; every source used is listed under Sources referred.", "Each open question says how to find the answer. Generating first shows exactly which database records will be created and waits for your confirmation.", "The AI cannot approve or publish integrations, rotate secrets or change policy - those stay with administrators.", "An AI provider must be configured under AI Providers; there is no fake offline answer."],
     },
     "integrations": {
         "title": "Integrations",
@@ -100,8 +100,13 @@ PAGES = {
         "title": "Monitoring",
         "summary": "Execution health: success rate, latency, error classes, drift and repair proposals.",
         "steps": ["Watch the success rate and the executions-per-hour chart.", "Open a failed execution to see the request, response shape and what to do.", "Review repair proposals that the platform prepared after repeated drift."],
-        "options": [{"name": "Error classes", "text": "auth_invalid, forbidden, rate_limited, upstream_error, response_drift, ... each with a plain-language meaning."}],
-        "tips": [],
+        "options": [{"name": "Error classes", "text": "auth_invalid, forbidden, rate_limited, upstream_error, response_drift, ... each with a plain-language meaning."},
+                    {"name": "Self-healing", "text": "When it is on (Settings), every failure is traced: the AI finds the root cause and tries to fix it - "
+                     "re-checking a recovered service, re-testing a credential, or preparing a corrected version for approval. What it cannot fix is "
+                     "emailed to administrators with the root cause, what it tried, what is still failing and what it needs."},
+                    {"name": "Investigate and fix", "text": "On any failed execution: run one self-healing investigation now, even when automatic self-healing is off."}],
+        "tips": ["Self-healing never changes production directly: configuration fixes are new versions an administrator approves.",
+                 "Secrets are never changed by the AI; a broken credential is always reported to an administrator."],
     },
     "providers": {
         "title": "AI Providers",
@@ -114,7 +119,7 @@ PAGES = {
         "title": "Settings",
         "summary": "Organisation policy, alert delivery (Slack and email), members and API tokens.",
         "steps": ["Set allowed API destinations and thresholds in Organisation policy.", "Under Alert delivery add a Slack webhook and/or SMTP details, choose the minimum severity and press Send test.", "Invite members and set their roles; create API tokens for MCP clients."],
-        "options": [{"name": "Credential rotation days", "text": "How old a secret may get before an alert."}, {"name": "Alert after N failures", "text": "Consecutive failed runs before a source raises an alert."}, {"name": "Minimum severity", "text": "Only alerts at or above this level are sent out."}],
+        "options": [{"name": "Credential rotation days", "text": "How old a secret may get before an alert."}, {"name": "Alert after N failures", "text": "Consecutive failed runs before a source raises an alert."}, {"name": "Minimum severity", "text": "Only alerts at or above this level are sent out."}, {"name": "Email templates", "text": "Each kind of alert (credential problem, review requested, API changed, data source problem, integration failure) has its own email. Customise the subject and intro, Preview it, and Send test email to check it in your inbox."}],
         "tips": ["The Slack webhook and SMTP password are stored in the encrypted vault."],
     },
     "users": {

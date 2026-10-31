@@ -567,3 +567,31 @@ class AssistantAction(Base):
     error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = created()
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class HealingCase(Base):
+    """One self-healing investigation: what failed, the traced root cause, every fix attempted and what is still needed."""
+    __tablename__ = "healing_cases"
+    id: Mapped[str] = pk()
+    organization_id: Mapped[str] = fk("organizations.id")
+    integration_id: Mapped[str | None] = fk("integrations.id", nullable=True, ondelete="SET NULL")
+    workflow_id: Mapped[str | None] = fk("workflows.id", nullable=True, ondelete="SET NULL")
+    execution_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    target: Mapped[str] = mapped_column(String(200), default="")
+    error_class: Mapped[str] = mapped_column(String(32), default="")
+    # investigating | resolved | awaiting_approval | needs_admin
+    status: Mapped[str] = mapped_column(String(24), default="investigating", index=True)
+    root_cause: Mapped[str] = mapped_column(Text, default="")
+    analysis: Mapped[str] = mapped_column(Text, default="")  # the AI's narrative over the evidence
+    attempts: Mapped[list] = mapped_column(JSON, default=list)  # [{"action", "result", "ok"}]
+    required: Mapped[list] = mapped_column(JSON, default=list)  # what an administrator must do
+    endpoint: Mapped[dict] = mapped_column(JSON, default=dict)  # {"method", "url", "operation"}
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    still_failing: Mapped[str] = mapped_column(Text, default="")
+    occurrences: Mapped[int] = mapped_column(Integer, default=1)
+    fix_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    approval_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    model: Mapped[str] = mapped_column(String(200), default="")
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = created()
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

@@ -141,6 +141,8 @@ def execute(db: Session, wf: Workflow, trigger: str, payload: dict, dry_run: boo
     run.finished_at = utcnow()
     db.commit()
     audit.record(db, wf.organization_id, actor, "workflow.run", wf.name, run_id=run.id, status=run.status, trigger=trigger, dry_run=dry_run)
+    from . import healing
+    healing.on_workflow_failure(db, wf, run)
     db.commit()
     return run
 

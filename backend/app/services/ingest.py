@@ -284,13 +284,19 @@ def _next_run(src: IngestSource) -> datetime:
 
 def _incremental_query(src: IngestSource, spec: dict) -> dict:
     inc = spec.get("incremental")
-    if not inc or not src.watermark:
+    if not inc or not (src.watermark or inc.get("initial_lookback_days")):
         return {}
     fmt = inc.get("format", "iso8601")
-    since = (parse_timestamp(src.watermark) or utcnow()) - timedelta(seconds=int(inc.get("overlap_seconds", 60)))  # overlap is absorbed by de-duplication
+    now = utcnow()
+    if src.watermark:
+        since = (parse_timestamp(src.watermark) or now) - timedelta(seconds=int(inc.get("overlap_seconds", 60)))  # overlap is absorbed by de-duplication
+    else:  # first run: start from a recent point instead of the API's oldest records
+        since = now - timedelta(days=int(inc["initial_lookback_days"]))
+    if inc.get("max_window_days"):  # some APIs reject longer date ranges (NVD: 120 days)
+        since = max(since, now - timedelta(days=int(inc["max_window_days"])))
     query = {inc["param"]: _format_watermark(since, fmt)}
     if inc.get("end_param"):
-        query[inc["end_param"]] = _format_watermark(utcnow(), fmt)
+        query[inc["end_param"]] = _format_watermark(now, fmt)
     return query
 
 

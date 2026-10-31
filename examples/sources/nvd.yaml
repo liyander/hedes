@@ -10,7 +10,7 @@ template:
     - {name: severity, label: Minimum CVSS v3 severity bucket, placeholder: CRITICAL, pattern: "^(LOW|MEDIUM|HIGH|CRITICAL)$", default: CRITICAL, help: "One of LOW, MEDIUM, HIGH, CRITICAL"}
   setup:
     - No account is needed. Without a key NVD allows 5 requests per 30 seconds; the connector throttles itself to stay below that.
-    - Each run reads up to 5 pages of 100 CVEs (offset paging with startIndex). Re-reads are de-duplicated.
+    - The first run reads CVEs published in the last 30 days; later runs read only CVEs published since the previous run (up to 5 pages of 100 per run). Re-reads are de-duplicated.
 schema_version: "1.0"
 integration:
   id: nvd
@@ -26,7 +26,7 @@ integration:
     - id: list_cves
       description: CVEs filtered by CVSS v3 severity
       method: GET
-      path: /rest/json/cve/2.0
+      path: /rest/json/cves/2.0
       input_schema:
         type: object
         properties: {}
@@ -48,4 +48,6 @@ integration:
           severity: "$.cve.metrics.cvssMetricV31[0].cvssData.baseSeverity"
           message: "$.cve.descriptions[0].value"
         defaults: {action: cve_published, outcome: unknown}
+        # NVD returns the oldest CVEs first, so read by publication date. Both dates are required and at most 120 days apart.
+        incremental: {param: pubStartDate, end_param: pubEndDate, format: iso8601_millis, initial_lookback_days: 30, max_window_days: 120, overlap_seconds: 3600}
         schedule: {interval_minutes: 360}

@@ -198,6 +198,7 @@ class PolicyIn(BaseModel):
     repair_after_failures: int | None = Field(default=None, ge=1, le=50)
     credential_rotation_days: int | None = Field(default=None, ge=7, le=730)
     source_failure_alert_after: int | None = Field(default=None, ge=1, le=20)
+    self_healing: bool | None = None  # trace failures, attempt fixes, email administrators what it could not fix
 
 
 @router.patch("/organizations/current/policy")

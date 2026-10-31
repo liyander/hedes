@@ -209,7 +209,7 @@ def test_alert_delivery_settings_and_thresholds(server, monkeypatch):
 
     sent = []
     monkeypatch.setattr(notify, "_slack", lambda db, org, cfg, text: sent.append(("slack", text)))
-    monkeypatch.setattr(notify, "_email", lambda db, org, cfg, subject, text: sent.append(("email", subject)))
+    monkeypatch.setattr(notify, "_email", lambda db, org, cfg, subject, text, html=None: sent.append(("email", subject)))
     org_id = next(m for m in [admin.get("/api/v1/organizations/current").json()])["id"]
     notify._dispatch([{"org_id": org_id, "kind": "k", "severity": "medium", "message": "too low", "link": ""},
                       {"org_id": org_id, "kind": "source_failing", "severity": "high", "message": "Okta failed 3 runs", "link": "#/sources"},
