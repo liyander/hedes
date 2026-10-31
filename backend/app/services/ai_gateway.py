@@ -352,21 +352,34 @@ class Gateway:
             q = q.where(UsageRecord.organization_id == self.org_id)
         return float(self.db.scalar(q) or 0.0)
 
-    def budget(self) -> float:
+    def _policy(self) -> dict:
         org = self.db.get(Organization, self.org_id) if self.org_id else None
-        return float(((org.policy if org else {}) or {}).get("ai_monthly_budget_usd", 25))
+        return (org.policy if org else {}) or {}
+
+    def budget(self) -> float:
+        return float(self._policy().get("ai_monthly_budget_usd", 25))
+
+    def active_provider(self) -> tuple[str, bool]:
+        """The provider the organization switched to ("" = automatic routing), and whether other providers are excluded."""
+        policy = self._policy()
+        return str(policy.get("ai_active_provider") or ""), bool(policy.get("ai_active_provider_only"))
 
     def select_models(self, task: str, est_tokens: int = 0, allow_local: bool = True) -> list[tuple[AIModel, AIProvider]]:
         need_json, confidential = TASKS.get(task, (False, True))
         over_budget = self.month_spend() >= self.budget()
+        active, only = self.active_provider()
         rows = self.db.execute(
             select(AIModel, AIProvider).join(AIProvider, AIModel.provider_id == AIProvider.id)
             .where(AIModel.enabled.is_(True), AIProvider.status == "active")).all()
+        if active and not any(p.id == active for _, p in rows):
+            active, only = "", False  # the chosen provider was removed or disabled: route automatically
         ranked = []
         for m, p in rows:
             is_local = p.provider_type == "local"
             if is_local and not allow_local:
                 continue
+            if only and not is_local and p.id != active:
+                continue  # the built-in rules stay as the last resort
             if not is_local:
                 if confidential and not m.allow_confidential:
                     continue
@@ -377,9 +390,9 @@ class Gateway:
             purposes = m.purposes or []
             fit = 0 if task in purposes else 1 if "general" in purposes or not purposes else 2
             json_penalty = 0 if not need_json or (m.capabilities or {}).get("json_mode", True) else 1
-            ranked.append(((1 if is_local else 0), fit, json_penalty, m.priority, m, p))
-        ranked.sort(key=lambda r: r[:4])
-        return [(r[4], r[5]) for r in ranked]
+            ranked.append(((0 if p.id == active else 1), (1 if is_local else 0), fit, json_penalty, m.priority, m, p))
+        ranked.sort(key=lambda r: r[:5])
+        return [(r[5], r[6]) for r in ranked]
 
     # -- calls
     def _record(self, task, m, p, pin, pout, started, ok, err=""):

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..core.db import get_db, new_id, utcnow
 from ..core.security import Principal, current_principal, require_human, require_role
-from ..models import AIMessage, AIModel, AIProvider, AISession, UsageRecord
+from ..models import AIMessage, AIModel, AIProvider, AISession, Organization, UsageRecord
 from ..services import audit, openapi, orchestrator, vault
 from ..services import ai_gateway
 from ..services.ai_gateway import TASKS, Gateway, ProviderError, bedrock_region
@@ -452,9 +452,33 @@ def delete_model(mid: str, p: Principal = Depends(require_human("owner")), db: S
 @router.get("/routing")
 def routing(p: Principal = Depends(current_principal), db: Session = Depends(get_db)):
     gw = Gateway(db, p.org_id)
+    active, only = gw.active_provider()
     return {"tasks": [{"task": t, "structured": TASKS[t][0], "confidential": TASKS[t][1],
                        "candidates": [f"{pr.name} · {m.label or m.model_id}" for m, pr in gw.select_models(t)]} for t in TASKS],
-            "month_spend": round(gw.month_spend(), 4), "budget": gw.budget()}
+            "month_spend": round(gw.month_spend(), 4), "budget": gw.budget(), "active_provider": active, "active_only": only}
+
+
+class ActiveProviderIn(BaseModel):
+    provider_id: str = Field(default="", max_length=64)  # "" switches back to automatic routing
+    only: bool = False  # skip the other providers; the built-in rules remain the last resort
+
+
+@router.put("/active-provider")
+def switch_provider(body: ActiveProviderIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+    """Switch the organization's AI provider: it is tried first for every task, other providers are the fallback."""
+    name = "automatic"
+    if body.provider_id:
+        pr = db.get(AIProvider, body.provider_id)
+        if not pr:
+            raise HTTPException(404, "Provider not found")
+        if pr.status != "active":
+            raise HTTPException(409, "Enable the provider before switching to it")
+        name = pr.name
+    org = db.get(Organization, p.org_id)
+    org.policy = {**(org.policy or {}), "ai_active_provider": body.provider_id, "ai_active_provider_only": bool(body.provider_id and body.only)}
+    audit.record(db, p.org_id, p, "ai.provider.switch", name, only=bool(body.provider_id and body.only))
+    db.commit()
+    return {"active_provider": body.provider_id, "active_only": bool(body.provider_id and body.only)}
 
 
 @router.get("/usage")

@@ -78,6 +78,7 @@ export async function render({ el }) {
     </div>
     <div class="split" style="margin-top:18px">
       <div class="stack">${providers.map((p) => `<div class="card"><div class="card-head"><span class="dot ${p.status === 'active' ? 'on' : 'off'}"></span><div><h2>${esc(p.name)}</h2><div class="small muted">${esc(TYPES[p.provider_type] || 'Deterministic heuristic agents, no network')}${p.region ? ` · ${esc(p.region)}` : ''}${p.base_url ? ` · <span class="mono">${esc(p.base_url)}</span>` : ''}</div></div><span class="spacer"></span>
+          ${p.id === routing.active_provider ? badge('ok', 'active') : ''}
           ${p.provider_type !== 'local' ? (p.has_key ? badge('ok', 'key in vault') : badge('medium', 'no key')) : badge('info', 'offline')}
           ${isAdmin() ? `<button class="btn sm" data-test="${p.id}">Test</button>` : ''}
           ${owner ? `<button class="btn sm" data-toggle="${p.id}" data-status="${p.status === 'active' ? 'disabled' : 'active'}">${p.status === 'active' ? 'Disable' : 'Enable'}</button>
@@ -89,6 +90,12 @@ export async function render({ el }) {
             <td class="small">$${m.cost_input_per_mtok} / $${m.cost_output_per_mtok}</td><td>${owner ? `<button class="btn sm" data-editmodel='${esc(JSON.stringify(m))}'>Edit</button>` : ''}</td></tr>`).join('')}
         </tbody></table></div></div>`).join('')}</div>
       <div class="stack">
+        <div class="card"><div class="card-head"><h2>Active provider</h2></div><div class="card-body">
+          <div class="field"><label>Use for all AI tasks</label><select id="active-provider" ${isAdmin() ? '' : 'disabled'}>
+            <option value="">Automatic (route by task, priority and budget)</option>
+            ${providers.filter((p) => p.status === 'active').map((p) => `<option value="${esc(p.id)}" ${p.id === routing.active_provider ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
+          <label class="check small"><input type="checkbox" id="active-only" ${routing.active_only ? 'checked' : ''} ${isAdmin() && routing.active_provider ? '' : 'disabled'}> Use only this provider (no fallback to other providers; built-in rules remain the last resort)</label>
+          <div class="hint">The chosen provider is tried first for every task. Switch any time; nothing else changes.</div></div></div>
         <div class="card"><div class="card-head"><h2>Task routing</h2><span class="muted small">first = tried first</span></div><div class="card-body">
           ${routing.tasks.map((t) => `<div style="padding:7px 0;border-bottom:1px solid var(--line)"><div class="row between"><b class="small">${esc(t.task.replace('_', ' '))}</b><span>${t.structured ? badge('info', 'JSON') : ''} ${t.confidential ? badge('medium', 'confidential') : ''}</span></div>
             <div class="small muted">${t.candidates.map((c, i) => `${i ? '→ ' : ''}${esc(c)}`).join(' ') || '<span style="color:var(--bad)">no eligible model</span>'}</div></div>`).join('')}</div></div>
@@ -96,6 +103,17 @@ export async function render({ el }) {
           ${usage.rows.length ? `<table><thead><tr><th>Model · task</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${usage.rows.map((r) => `<tr><td class="small"><span class="mono">${esc(r.model)}</span><div class="muted">${esc(r.task)}${r.failures ? ` · <span style="color:var(--bad)">${r.failures} failed</span>` : ''}</div></td><td>${r.calls}</td><td>${(r.prompt_tokens + r.completion_tokens).toLocaleString()}</td><td>$${r.cost}</td></tr>`).join('')}</tbody></table>` : '<p class="muted small">No AI calls yet.</p>'}
           ${usage.recent.filter((r) => !r.success).slice(0, 4).map((r) => `<div class="callout bad small" style="margin-top:8px">${esc(r.model)} · ${esc(r.task)} · ${agoCell(r.at)}<div class="muted">${esc(r.error)}</div></div>`).join('')}</div></div>` : ''}
       </div></div></div>`;
+
+  const switchProvider = async () => {
+    const id = $('#active-provider', el).value;
+    try {
+      await api('/ai/active-provider', { method: 'PUT', body: { provider_id: id, only: id ? $('#active-only', el).checked : false } });
+      toast(id ? `Switched to ${providers.find((p) => p.id === id).name}` : 'Switched to automatic routing', 'ok');
+    } catch (err) { toast(err.message, 'bad'); }
+    route();
+  };
+  $('#active-provider', el)?.addEventListener('change', switchProvider);
+  $('#active-only', el)?.addEventListener('change', switchProvider);
 
   $('#add', el)?.addEventListener('click', async () => {
     const presets = await api('/ai/provider-presets');
