@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..core.db import utcnow
 from ..models import Connection, Execution, Integration, IntegrationVersion, Tool
 from . import audit, engine, monitoring, repairs, vault
 from .integrations import org_policy
@@ -83,7 +84,17 @@ def credential_for(db: Session, org_id: str, config: dict) -> dict | None:
     conn = db.scalars(select(Connection).where(Connection.organization_id == org_id, Connection.name == auth.get("credential_ref"))).first()
     if not conn or conn.status != "active" or conn.auth_type != auth["type"]:
         return None
+    if conn.expires_at and conn.expires_at <= utcnow():
+        return None  # expired credentials are treated as missing so the failure names the real problem
     return vault.read_secret(db, conn.secret_ref, org_id)
+
+
+def touch_connection(db: Session, org_id: str, config: dict) -> None:
+    """Record credential use. Called after the outbound request so no write lock is held across network I/O."""
+    auth = config["integration"].get("authentication") or {}
+    conn = db.scalars(select(Connection).where(Connection.organization_id == org_id, Connection.name == auth.get("credential_ref"))).first()
+    if conn:
+        conn.last_used_at = utcnow()
 
 
 def execute_tool(db: Session, actor: Actor, tool: Tool, inputs: dict) -> Execution:
@@ -103,6 +114,8 @@ def execute_tool(db: Session, actor: Actor, tool: Tool, inputs: dict) -> Executi
                                     allowed_domains=org_policy(db, actor.org_id).get("allowed_domains") or [])
         finally:
             _CONCURRENCY.release()
+    if credential is not None:
+        touch_connection(db, actor.org_id, config)
     ex = Execution(organization_id=actor.org_id, tool_id=tool.id, tool_name=tool.name, integration_id=integ.id,
                    version_id=version.id, actor_id=actor.user_id, actor_type=actor.kind, status=result.status,
                    http_status=result.http_status, duration_ms=result.duration_ms, attempts=result.attempts,

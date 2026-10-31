@@ -60,6 +60,10 @@ def validate_config(config: dict) -> dict:
         errors.append({"path": "integration/authentication", "message": "header_name is required for api_key_header"})
     if auth["type"] == "api_key_query" and not auth.get("param_name"):
         errors.append({"path": "integration/authentication", "message": "param_name is required for api_key_query"})
+    if auth["type"] == "oauth2_client_credentials" and not auth.get("token_url"):
+        errors.append({"path": "integration/authentication", "message": "token_url is required for oauth2_client_credentials"})
+    if auth["type"] == "aws_sigv4" and not (auth.get("region") and auth.get("service")):
+        errors.append({"path": "integration/authentication", "message": "region and service are required for aws_sigv4"})
     for h in (integ.get("default_headers") or {}):
         if h.lower() in FORBIDDEN_HEADERS:
             errors.append({"path": "integration/default_headers", "message": f"Header {h!r} may not be set by configuration"})
@@ -116,7 +120,30 @@ def validate_config(config: dict) -> dict:
             errors.append({"path": where + "/pagination", "message": "Paginated operations need response.items_path"})
         if pag and pag["type"] == "cursor" and not (pag.get("cursor_param") and pag.get("next_cursor_path")):
             errors.append({"path": where + "/pagination", "message": "Cursor pagination needs cursor_param and next_cursor_path"})
-        if not resp.get("mapping"):
+        if pag and pag["type"] == "offset" and not (pag.get("offset_param") and pag.get("size_param")):
+            errors.append({"path": where + "/pagination", "message": "Offset pagination needs offset_param and size_param"})
+        ing = op.get("ingest")
+        if ing:
+            if op["method"] != "GET":
+                errors.append({"path": where + "/ingest", "message": "Ingestion operations must use GET (they are re-run on a schedule)"})
+            if not resp.get("items_path"):
+                errors.append({"path": where + "/ingest", "message": "Ingestion needs response.items_path to find the records"})
+            required_inputs = set(op["input_schema"].get("required") or [])
+            if required_inputs:
+                errors.append({"path": where + "/input_schema", "message": "Ingestion operations run unattended: inputs cannot be required"})
+            for name, path in (ing.get("fields") or {}).items():
+                try:
+                    jsonpath.parse(path)
+                except jsonpath.JSONPathError as e:
+                    errors.append({"path": where + f"/ingest/fields/{name}", "message": str(e)})
+            for need in ("timestamp", "action"):
+                if need not in (ing.get("fields") or {}) and need not in (ing.get("defaults") or {}):
+                    errors.append({"path": where + "/ingest/fields", "message": f"Common format needs a {need!r} mapping"})
+            if "event_id" not in (ing.get("fields") or {}):
+                warnings.append({"path": where + "/ingest/fields", "message": "No event_id mapping: records are de-duplicated by a hash of the raw record"})
+            if (ing.get("incremental") or {}).get("param") in (op.get("request") or {}).get("query", {}):
+                warnings.append({"path": where + "/ingest/incremental", "message": "The incremental parameter is also set in request.query and will be overwritten"})
+        elif not resp.get("mapping"):
             warnings.append({"path": where + "/response", "message": "No output mapping: the raw response body will be returned"})
     return {"valid": not errors, "errors": errors, "warnings": warnings}
 

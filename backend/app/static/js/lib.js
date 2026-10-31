@@ -64,6 +64,7 @@ const ICONS = {
   eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 15a3 3 0 100-6 3 3 0 000 6z',
   refresh: 'M4 4v6h6M20 20v-6h-6M5.500 15A8 8 0 0019 13M18.500 9A8 8 0 005 11',
   chev: 'M9 6l6 6-6 6',
+  db: 'M4 6c0-1.700 3.600-3 8-3s8 1.300 8 3-3.600 3-8 3-8-1.300-8-3zM4 6v6c0 1.700 3.600 3 8 3s8-1.300 8-3V6M4 12v6c0 1.700 3.600 3 8 3s8-1.300 8-3v-6',
   agent: 'M12 3v3M8 8h8a3 3 0 013 3v5a3 3 0 01-3 3H8a3 3 0 01-3-3v-5a3 3 0 013-3zM9.500 13h.01M14.500 13h.01M2 13v2M22 13v2',
 };
 
@@ -96,6 +97,7 @@ const STATUS_CLASS = {
   draft: '', paused: '', superseded: 'low', skipped: 'low', cancelled: 'low', disabled: 'low', archived: 'low', revoked: 'low',
   rejected: 'critical', failed: 'critical', invalid: 'critical', changes_requested: 'medium', revision: 'medium', proposed: 'info',
   low: 'low', medium: 'medium', high: 'high', critical: 'critical', info: 'info',
+  healthy: 'ok', failing: 'critical', stale: 'high', degraded: 'medium', partial: 'medium', success: 'ok', failure: 'critical', unknown: '',
 };
 export const badge = (s, label) => (s ? `<span class="badge ${STATUS_CLASS[s] ?? ''}">${esc(label ?? String(s).replace(/_/g, ' '))}</span>` : '');
 export const method = (m) => `<span class="method ${esc(m)}">${esc(m)}</span>`;

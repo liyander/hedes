@@ -214,6 +214,10 @@ class Connection(Base):
     status: Mapped[str] = mapped_column(String(16), default="active")  # active | invalid | revoked
     last_tested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_test_result: Mapped[str] = mapped_column(String(200), default="")
+    # Credential hygiene: optional expiry, last rotation and last use drive the rotation/expiry alerts.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[str | None] = fk("users.id", nullable=True, ondelete="SET NULL")
     created_at: Mapped[datetime] = created()
 
@@ -400,4 +404,86 @@ class WebhookDelivery(Base):
     id: Mapped[str] = pk()
     workflow_id: Mapped[str] = fk("workflows.id")
     delivery_id: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = created()
+
+
+class IngestSource(Base):
+    """One scheduled data source: an ``ingest`` operation of a published integration. Carries run state and health."""
+    __tablename__ = "ingest_sources"
+    __table_args__ = (UniqueConstraint("organization_id", "integration_id", "operation_id"),)
+    id: Mapped[str] = pk()
+    organization_id: Mapped[str] = fk("organizations.id")
+    integration_id: Mapped[str] = fk("integrations.id")
+    operation_id: Mapped[str] = mapped_column(String(100))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    watermark: Mapped[str] = mapped_column(String(64), default="")  # newest canonical timestamp ingested so far
+    state: Mapped[str] = mapped_column(String(16), default="never_run")  # never_run | running | ok | degraded | failing
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    last_error_class: Mapped[str] = mapped_column(String(32), default="")
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    total_stored: Mapped[int] = mapped_column(Integer, default=0)
+    total_duplicates: Mapped[int] = mapped_column(Integer, default=0)
+    total_rejected: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = created()
+
+
+class IngestRun(Base):
+    __tablename__ = "ingest_runs"
+    id: Mapped[str] = pk()
+    organization_id: Mapped[str] = fk("organizations.id")
+    source_id: Mapped[str] = fk("ingest_sources.id")
+    trigger: Mapped[str] = mapped_column(String(16), default="schedule")  # schedule | manual
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running | succeeded | partial | failed
+    fetched: Mapped[int] = mapped_column(Integer, default=0)
+    stored: Mapped[int] = mapped_column(Integer, default=0)
+    duplicates: Mapped[int] = mapped_column(Integer, default=0)
+    rejected: Mapped[int] = mapped_column(Integer, default=0)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_class: Mapped[str] = mapped_column(String(32), default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    watermark_before: Mapped[str] = mapped_column(String(64), default="")
+    watermark_after: Mapped[str] = mapped_column(String(64), default="")
+    started_at: Mapped[datetime] = created()
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class NormalizedEvent(Base):
+    """The common format every source is mapped into (see services/ingest.py CANONICAL_FIELDS)."""
+    __tablename__ = "normalized_events"
+    __table_args__ = (UniqueConstraint("organization_id", "integration_id", "event_id"),
+                      Index("ix_events_org_ts", "organization_id", "timestamp"))
+    id: Mapped[str] = pk()
+    organization_id: Mapped[str] = fk("organizations.id")
+    integration_id: Mapped[str] = fk("integrations.id")
+    source_id: Mapped[str] = fk("ingest_sources.id")
+    source: Mapped[str] = mapped_column(String(64), index=True)  # integration slug
+    event_id: Mapped[str] = mapped_column(String(200))
+    timestamp: Mapped[datetime] = mapped_column(DateTime)
+    category: Mapped[str] = mapped_column(String(32), default="")
+    action: Mapped[str] = mapped_column(String(200), default="")
+    actor: Mapped[str] = mapped_column(String(255), default="")
+    target: Mapped[str] = mapped_column(String(255), default="")
+    outcome: Mapped[str] = mapped_column(String(16), default="unknown")  # success | failure | unknown
+    severity: Mapped[str] = mapped_column(String(16), default="info")  # info | low | medium | high | critical
+    message: Mapped[str] = mapped_column(Text, default="")
+    raw: Mapped[dict] = mapped_column(JSON, default=dict)
+    ingested_at: Mapped[datetime] = created()
+
+
+class DeadLetter(Base):
+    """A record the platform could not normalise. Kept (with the reason) instead of failing the whole run."""
+    __tablename__ = "dead_letters"
+    id: Mapped[str] = pk()
+    organization_id: Mapped[str] = fk("organizations.id")
+    source_id: Mapped[str] = fk("ingest_sources.id")
+    run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    reasons: Mapped[list] = mapped_column(JSON, default=list)
+    raw: Mapped[dict] = mapped_column(JSON, default=dict)
+    fingerprint: Mapped[str] = mapped_column(String(64), default="", index=True)  # same bad record is parked once, not every run
     created_at: Mapped[datetime] = created()

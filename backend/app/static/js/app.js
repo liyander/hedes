@@ -9,7 +9,7 @@ const NAV = [
   { items: [['dashboard', 'Dashboard', 'grid'], ['studio', 'AI Studio', 'spark']] },
   { label: 'Build', items: [['integrations', 'Integrations', 'plug'], ['workflows', 'Workflows', 'flow'], ['testlab', 'Test Lab', 'flask'], ['credentials', 'Credentials', 'key']] },
   { label: 'Govern', items: [['approvals', 'Approvals', 'check', 'approvals'], ['tools', 'Tool Registry', 'box'], ['versions', 'Version History', 'history'], ['audit', 'Audit log', 'list']] },
-  { label: 'Operate', items: [['monitoring', 'Monitoring', 'pulse', 'alerts']] },
+  { label: 'Operate', items: [['sources', 'Data Sources', 'db', 'sourcebad'], ['monitoring', 'Monitoring', 'pulse', 'alerts']] },
   { label: 'Platform', items: [['providers', 'AI Providers', 'cpu'], ['settings', 'Settings', 'cog']] },
 ];
 
@@ -24,6 +24,7 @@ const ROUTES = {
   tools: ['./pages/tools.js', 'Tool Registry'],
   versions: ['./pages/versions.js', 'Version History'],
   audit: ['./pages/audit.js', 'Audit log'],
+  sources: ['./pages/sources.js', 'Data Sources'],
   monitoring: ['./pages/monitoring.js', 'Monitoring'],
   providers: ['./pages/providers.js', 'AI Providers'],
   settings: ['./pages/settings.js', 'Settings'],
@@ -72,9 +73,10 @@ function shell() {
 async function refreshCounts() {
   if (!state.user) return;
   try {
-    const [alerts, m] = await Promise.all([api('/alerts'), api('/monitoring/metrics')]);
+    const [alerts, m, src] = await Promise.all([api('/alerts'), api('/monitoring/metrics'), api('/sources').catch(() => null)]);
     state.alerts = alerts;
-    state.counts = { approvals: isAdmin() ? m.pending_approvals : 0, alerts: alerts.length };
+    state.counts = { approvals: isAdmin() ? m.pending_approvals : 0, alerts: alerts.length,
+      sourcebad: src ? (src.summary.failing || 0) + (src.summary.stale || 0) + (src.summary.degraded || 0) : 0 };
     for (const [k, n] of Object.entries(state.counts)) {
       const el = document.querySelector(`[data-count="${k}"]`);
       if (el) { el.textContent = n > 99 ? '99+' : n; el.hidden = !n; }

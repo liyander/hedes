@@ -1,0 +1,43 @@
+schema_version: "1.0"
+integration:
+  id: okta
+  name: Okta System Log
+  version: "1.0.0"
+  transport: http
+  description: Pulls the Okta System Log (logins, MFA and policy changes) into the common event format. Bundled mock.
+  base_url: ${PUBLIC_BASE_URL}/mock/okta
+  authentication:
+    type: ssws
+    credential_ref: okta
+  rate_limit: {requests_per_minute: 120}
+  operations:
+    - id: list_system_log
+      description: Read identity events from the Okta System Log
+      method: GET
+      path: /api/v1/logs
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {limit: "20"}
+      pagination: {type: link, max_pages: 20}
+      retry: {max_attempts: 3, backoff_seconds: 1}
+      response:
+        status_codes: [200]
+        items_path: "$"
+      ingest:
+        category: identity
+        fields:
+          event_id: "$.uuid"
+          timestamp: "$.published"
+          actor: "$.actor.alternateId"
+          action: "$.eventType"
+          target: "$.target[0].alternateId"
+          outcome: "$.outcome.result"
+          severity: "$.severity"
+          message: "$.displayMessage"
+        value_maps:
+          outcome: {SUCCESS: success, FAILURE: failure, DENY: failure}
+          severity: {DEBUG: info, INFO: info, WARN: medium, ERROR: high}
+        incremental: {param: since, format: iso8601, overlap_seconds: 60}
+        schedule: {interval_minutes: 15}

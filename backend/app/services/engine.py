@@ -7,12 +7,18 @@ decrypted credential. ``transport`` lets tests and mock runs swap the network fo
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
+import random
 import re
+import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import httpx
 from jsonschema import Draft202012Validator
@@ -22,6 +28,9 @@ from . import egress, jsonpath, templates
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 RETRYABLE_STATUS = {429, 502, 503, 504}
 IDEMPOTENT_METHODS = {"GET", "PUT", "DELETE"}
+DEFAULT_MAX_WAIT = 10.0
+_sleep = time.sleep      # swapped in tests so backoff does not slow the suite
+_random = random.random
 
 ERROR_GUIDE = {
     "input_invalid": ("The inputs do not match the operation's input schema.", "Fix the inputs and try again."),
@@ -131,6 +140,139 @@ def build_request(config: dict, op: dict, inputs: dict) -> PreparedRequest:
     return PreparedRequest(op["method"], url, query, headers, json_body, form_body)
 
 
+# ------------------------------------------------------------------------------------ throttling & backoff
+
+_THROTTLE: dict[str, float] = {}
+_THROTTLE_LOCK = threading.Lock()
+
+
+def _throttle(key: str, requests_per_minute: int) -> float:
+    """Per-connector outbound limit: spaces requests to one API at least 60/rpm seconds apart. Returns seconds waited."""
+    gap = 60.0 / max(1, requests_per_minute)
+    with _THROTTLE_LOCK:
+        now = time.monotonic()
+        at = max(now, _THROTTLE.get(key, 0.0))
+        _THROTTLE[key] = at + gap
+    wait = min(at - now, 30.0)
+    if wait > 0:
+        _sleep(wait)
+    return max(wait, 0.0)
+
+
+def server_directed_wait(headers: dict) -> float | None:
+    """Seconds the API asked us to wait: Retry-After (delta or HTTP date) or a rate-limit reset header."""
+    h = {k.lower(): v for k, v in headers.items()}
+    ra = (h.get("retry-after") or "").strip()
+    if ra:
+        if ra.replace(".", "", 1).isdigit():
+            return float(ra)
+        try:
+            return max(0.0, (parsedate_to_datetime(ra) - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError):
+            pass
+    for name in ("x-ratelimit-reset", "ratelimit-reset", "x-rate-limit-reset"):
+        v = (h.get(name) or "").strip()
+        if v.replace(".", "", 1).isdigit():
+            n = float(v)
+            return max(0.0, n - time.time()) if n > 1e9 else n  # epoch timestamp or delta seconds
+    return None
+
+
+def retry_wait(attempt: int, backoff: float, headers: dict, max_wait: float = DEFAULT_MAX_WAIT, jitter: bool = True) -> float:
+    """Exponential backoff with 'equal jitter' so parallel runs do not retry in lockstep; the API's own hint is a floor."""
+    exp = backoff * (2 ** (attempt - 1))
+    wait = exp / 2 + _random() * exp / 2 if jitter else exp
+    hinted = server_directed_wait(headers)
+    if hinted is not None:
+        wait = max(wait, hinted)
+    return min(wait, max_wait)
+
+
+# ------------------------------------------------------------------------------------ AWS Signature V4
+
+def _hmac(key: bytes, msg: str) -> bytes:
+    return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+
+
+def sigv4_authorization(method: str, host: str, path: str, query: dict, body: bytes, access_key: str, secret_key: str,
+                        region: str, service: str, amz_date: str, session_token: str | None = None) -> str:
+    """AWS Signature Version 4 ``Authorization`` header for a request that signs host + x-amz-date (+ session token)."""
+    date = amz_date[:8]
+    pairs = sorted((quote(str(k), safe="-_.~"), quote(str(v), safe="-_.~")) for k, vs in query.items()
+                   for v in (vs if isinstance(vs, list) else [vs]))
+    canonical_query = "&".join(f"{k}={v}" for k, v in pairs)
+    headers = {"host": host, "x-amz-date": amz_date}
+    if session_token:
+        headers["x-amz-security-token"] = session_token
+    signed = ";".join(sorted(headers))
+    canonical_headers = "".join(f"{k}:{headers[k]}\n" for k in sorted(headers))
+    canonical = "\n".join([method.upper(), quote(path or "/", safe="/-_.~%"), canonical_query, canonical_headers, signed,
+                           hashlib.sha256(body).hexdigest()])
+    scope = f"{date}/{region}/{service}/aws4_request"
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+    key = _hmac(_hmac(_hmac(_hmac(("AWS4" + secret_key).encode(), date), region), service), "aws4_request")
+    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    return f"AWS4-HMAC-SHA256 Credential={access_key}/{scope}, SignedHeaders={signed}, Signature={signature}"
+
+
+def _host_header(url: str) -> str:
+    p = urlsplit(url)
+    default = {"http": 80, "https": 443}.get(p.scheme)
+    return p.hostname + (f":{p.port}" if p.port and p.port != default else "")
+
+
+def _sign_request(req: PreparedRequest, auth: dict, secret: dict, body: bytes) -> None:
+    amz_date = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    token = secret.get("session_token") or None
+    req.headers["x-amz-date"] = amz_date
+    if token:
+        req.headers["x-amz-security-token"] = token
+    req.headers["Authorization"] = sigv4_authorization(
+        req.method, _host_header(req.url), urlsplit(req.url).path, req.query, body, secret["access_key_id"],
+        secret["secret_access_key"], auth["region"], auth["service"], amz_date, token)
+
+
+# ------------------------------------------------------------------------------------ OAuth2 client credentials
+
+_TOKEN_CACHE: dict[str, tuple[str, float]] = {}
+_TOKEN_LOCK = threading.Lock()
+
+
+def _token_key(auth: dict, secret: dict) -> str:
+    return hashlib.sha256(f"{auth.get('token_url')}|{secret.get('client_id')}".encode()).hexdigest()
+
+
+def _fetch_oauth_token(client: httpx.Client, auth: dict, secret: dict, timeout: float, check) -> str:
+    key = _token_key(auth, secret)
+    with _TOKEN_LOCK:
+        cached = _TOKEN_CACHE.get(key)
+    if cached and cached[1] > time.time() + 30:
+        return cached[0]
+    check(auth["token_url"])
+    data = {"grant_type": "client_credentials"}
+    if auth.get("scopes"):
+        data["scope"] = " ".join(auth["scopes"])
+    basic = base64.b64encode(f"{secret['client_id']}:{secret['client_secret']}".encode()).decode()
+    try:
+        r = client.post(auth["token_url"], data=data, headers={"Authorization": f"Basic {basic}", "Accept": "application/json"}, timeout=timeout)
+    except httpx.TimeoutException:
+        raise EngineError("timeout", "The OAuth token endpoint did not respond in time")
+    except httpx.TransportError as e:
+        raise EngineError("network_error", f"OAuth token endpoint unreachable: {type(e).__name__}")
+    if r.status_code in (400, 401, 403):
+        raise EngineError("auth_invalid", f"The token endpoint rejected the client credentials (HTTP {r.status_code})", r.status_code)
+    if r.status_code != 200:
+        raise EngineError("upstream_error", f"The token endpoint failed (HTTP {r.status_code})", r.status_code)
+    try:
+        body = r.json()
+        token, ttl = body["access_token"], float(body.get("expires_in", 300))
+    except (ValueError, KeyError, TypeError):
+        raise EngineError("response_invalid", "The token endpoint did not return an access_token")
+    with _TOKEN_LOCK:
+        _TOKEN_CACHE[key] = (token, time.time() + ttl)
+    return token
+
+
 def apply_auth(req: PreparedRequest, auth: dict, credential: dict | None) -> None:
     kind = auth.get("type", "none")
     if kind == "none":
@@ -145,6 +287,12 @@ def apply_auth(req: PreparedRequest, auth: dict, credential: dict | None) -> Non
     elif kind == "basic" and secret.get("username") is not None:
         raw = f"{secret['username']}:{secret.get('password', '')}".encode()
         req.headers["Authorization"] = "Basic " + base64.b64encode(raw).decode()
+    elif kind == "ssws" and secret.get("token"):
+        req.headers["Authorization"] = f"SSWS {secret['token']}"  # Okta
+    elif kind == "oauth2_client_credentials" and secret.get("client_id") and secret.get("client_secret"):
+        pass  # the bearer token is obtained at send time (it expires and is cached)
+    elif kind == "aws_sigv4" and secret.get("access_key_id") and secret.get("secret_access_key"):
+        pass  # every request is signed at send time
     else:
         raise EngineError("credential_missing", f"The connection does not hold a {kind} credential")
 
@@ -152,7 +300,7 @@ def apply_auth(req: PreparedRequest, auth: dict, credential: dict | None) -> Non
 def redact(req: PreparedRequest, auth: dict) -> dict:
     secret_header = (auth.get("header_name") or "").lower() if auth.get("type") == "api_key_header" else ""
     secret_param = auth.get("param_name") if auth.get("type") == "api_key_query" else None
-    headers = {k: ("••••••" if k.lower() in ("authorization", secret_header) else v) for k, v in req.headers.items()}
+    headers = {k: ("••••••" if k.lower() in ("authorization", "x-amz-security-token", secret_header) else v) for k, v in req.headers.items()}
     query = {k: ("••••••" if k == secret_param else v) for k, v in req.query.items()}
     preview = {"method": req.method, "url": req.url, "query": query, "headers": headers}
     if req.json_body is not None:
@@ -206,12 +354,21 @@ def map_output(resp_cfg: dict, body: Any) -> tuple[Any, list[str]]:
     return map_one(body, True), missing
 
 
-def _send(client: httpx.Client, req: PreparedRequest, timeout: float) -> tuple[int, dict, bytes]:
-    kwargs: dict = {"params": req.query, "headers": req.headers, "timeout": timeout}
+def _encode_body(req: PreparedRequest) -> bytes:
+    """Serialise the body once so the exact bytes can be signed (SigV4) and sent."""
     if req.json_body is not None:
-        kwargs["json"] = req.json_body
-    elif req.form_body is not None:
-        kwargs["data"] = req.form_body
+        req.headers.setdefault("Content-Type", "application/json")
+        return json.dumps(req.json_body, separators=(",", ":")).encode()
+    if req.form_body is not None:
+        req.headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+        return urlencode(req.form_body, doseq=True).encode()
+    return b""
+
+
+def _send(client: httpx.Client, req: PreparedRequest, timeout: float, body: bytes = b"") -> tuple[int, dict, bytes]:
+    kwargs: dict = {"params": req.query, "headers": req.headers, "timeout": timeout}
+    if body:
+        kwargs["content"] = body
     with client.stream(req.method, req.url, **kwargs) as r:
         buf = bytearray()
         for chunk in r.iter_bytes():
@@ -223,10 +380,17 @@ def _send(client: httpx.Client, req: PreparedRequest, timeout: float) -> tuple[i
 
 def execute(config: dict, op_id: str, inputs: dict, *, credential: dict | None = None,
             transport: httpx.BaseTransport | None = None, allowed_domains: list[str] | None = None,
-            live: bool = True) -> EngineResult:
-    """Run one operation. ``live=False`` (mock/test runs) skips DNS-based egress checks."""
+            live: bool = True, query_overrides: dict | None = None, raw: bool = False) -> EngineResult:
+    """Run one operation. ``live=False`` (mock/test runs) skips DNS-based egress checks.
+
+    ``query_overrides`` adds query parameters after the request is rendered (used for incremental ingestion).
+    ``raw=True`` returns the un-mapped records (``{"items": [...], "count": n}``) and skips the drift check; the
+    ingestion pipeline maps and validates each record itself so one bad record cannot fail the run.
+    """
     started = time.monotonic()
     result = EngineResult(status="failed")
+    waits: list[float] = []
+    throttled = 0.0
     try:
         integ = config["integration"]
         op = find_operation(config, op_id)
@@ -234,16 +398,22 @@ def execute(config: dict, op_id: str, inputs: dict, *, credential: dict | None =
         if problems:
             raise EngineError("input_invalid", "; ".join(problems[:5]))
         req = build_request(config, op, inputs or {})
+        if query_overrides:
+            req.query.update({k: str(v) for k, v in query_overrides.items()})
         auth = integ.get("authentication") or {"type": "none"}
         apply_auth(req, auth, credential)
         result.request_preview = redact(req, auth)
-        try:
-            if live:
-                egress.check_url(req.url, allowed_domains)
-            else:
-                egress.static_check(req.url)
-        except egress.EgressDenied as e:
-            raise EngineError("egress_denied", str(e))
+
+        def egress_check(url: str) -> None:
+            try:
+                if live:
+                    egress.check_url(url, allowed_domains)
+                else:
+                    egress.static_check(url)
+            except egress.EgressDenied as e:
+                raise EngineError("egress_denied", str(e))
+
+        egress_check(req.url)
 
         resp_cfg = op.get("response") or {}
         expected = set(resp_cfg.get("status_codes") or [200, 201, 202, 204])
@@ -252,26 +422,41 @@ def execute(config: dict, op_id: str, inputs: dict, *, credential: dict | None =
         can_retry = op["method"] in IDEMPOTENT_METHODS or bool(op.get("idempotent"))
         max_attempts = int(retry.get("max_attempts", 2 if can_retry else 1)) if can_retry else 1
         backoff = float(retry.get("backoff_seconds", 0.5))
+        max_wait = float(retry.get("max_wait_seconds", DEFAULT_MAX_WAIT))
+        jitter = retry.get("jitter", True)
+        rpm = (integ.get("rate_limit") or {}).get("requests_per_minute")
+        throttle_key = f"{integ.get('id')}|{integ.get('base_url')}"
         pag = op.get("pagination")
         pages_left = int(pag.get("max_pages", 5)) if pag else 1
-        page_no, cursor = 1, None
+        page_no, cursor, offset, pages = 1, None, 0, 0
         collected: list = []
         first_body: Any = None
+        secret = credential or {}
 
         with httpx.Client(transport=transport, follow_redirects=False) as client:
+            if auth.get("type") == "oauth2_client_credentials":
+                req.headers["Authorization"] = "Bearer " + _fetch_oauth_token(client, auth, secret, timeout, egress_check)
             while pages_left > 0:
                 if pag and pag["type"] == "page":
                     req.query[pag.get("page_param", "page")] = str(page_no)
                     if pag.get("size_param"):
                         req.query[pag["size_param"]] = str(pag.get("size", 50))
-                elif pag and cursor is not None:
+                elif pag and pag["type"] == "offset":
+                    req.query[pag["offset_param"]] = str(offset)
+                    req.query[pag["size_param"]] = str(pag.get("size", 50))
+                elif pag and pag["type"] == "cursor" and cursor is not None:
                     req.query[pag["cursor_param"]] = str(cursor)
+                body_bytes = _encode_body(req)
 
-                status, headers, raw = 0, {}, b""
+                status, headers, raw_body = 0, {}, b""
                 for attempt in range(1, max_attempts + 1):
                     result.attempts += 1
+                    if rpm:
+                        throttled += _throttle(throttle_key, int(rpm))
+                    if auth.get("type") == "aws_sigv4":
+                        _sign_request(req, auth, secret, body_bytes)
                     try:
-                        status, headers, raw = _send(client, req, timeout)
+                        status, headers, raw_body = _send(client, req, timeout, body_bytes)
                     except httpx.TimeoutException:
                         if attempt == max_attempts:
                             raise EngineError("timeout", f"No response within {timeout:g}s")
@@ -281,28 +466,30 @@ def execute(config: dict, op_id: str, inputs: dict, *, credential: dict | None =
                     else:
                         if status not in RETRYABLE_STATUS or attempt == max_attempts:
                             break
-                    wait = backoff * (2 ** (attempt - 1))
-                    ra = headers.get("retry-after", "")
-                    if ra.isdigit():
-                        wait = max(wait, float(ra))
-                    time.sleep(min(wait, 10.0))
+                    wait = retry_wait(attempt, backoff, headers, max_wait, bool(jitter))
+                    waits.append(round(wait, 3))
+                    _sleep(wait)
 
                 result.http_status = status
+                if status == 401 and auth.get("type") == "oauth2_client_credentials":
+                    with _TOKEN_LOCK:
+                        _TOKEN_CACHE.pop(_token_key(auth, secret), None)  # force a fresh token next run
                 if status not in expected:
                     cls = _classify_status(status)
-                    detail = raw[:300].decode("utf-8", "replace").strip()
+                    detail = raw_body[:300].decode("utf-8", "replace").strip()
                     raise EngineError(cls, f"HTTP {status}" + (f": {detail}" if detail else ""), status)
                 if (resp_cfg.get("format") or "json") == "text":
-                    body: Any = {"text": raw.decode("utf-8", "replace")}
-                elif not raw.strip():
+                    body: Any = {"text": raw_body.decode("utf-8", "replace")}
+                elif not raw_body.strip():
                     body = {}
                 else:
                     try:
-                        body = json.loads(raw)
+                        body = json.loads(raw_body)
                     except ValueError:
                         raise EngineError("response_invalid", "Response body is not valid JSON", status)
                 if first_body is None:
                     first_body = body
+                pages += 1
                 if not pag:
                     break
                 found, items = jsonpath.query(body, resp_cfg["items_path"])
@@ -313,32 +500,70 @@ def execute(config: dict, op_id: str, inputs: dict, *, credential: dict | None =
                     if len(items) < int(pag.get("size", 50)) or not items:
                         break
                     page_no += 1
+                elif pag["type"] == "offset":
+                    offset += len(items)
+                    total_ok, total = jsonpath.query(body, pag["total_path"]) if pag.get("total_path") else (False, None)
+                    if not items or len(items) < int(pag.get("size", 50)) or (total_ok and isinstance(total, int) and offset >= total):
+                        break
+                elif pag["type"] == "link":
+                    nxt = _next_link(headers, req.url)
+                    if not nxt:
+                        break
+                    req.query.update(dict(parse_qsl(urlsplit(nxt).query)))
                 else:
                     ok, cursor = jsonpath.query(body, pag["next_cursor_path"])
                     if not ok or cursor in (None, ""):
                         break
 
-        if pag:
-            items_cfg = {**resp_cfg, "items_path": "$"}
-            output, missing = map_output(items_cfg, collected)
+        result.diagnostics = {"response_shape": jsonpath.shape(first_body), "pages": pages}
+        if waits:
+            result.diagnostics["retry_waits"] = waits
+        if throttled:
+            result.diagnostics["throttled_seconds"] = round(throttled, 3)
+        if raw:
+            if not pag:
+                found, items = jsonpath.query(first_body, resp_cfg["items_path"]) if resp_cfg.get("items_path") else (False, [])
+                collected = items if found and isinstance(items, list) else []
+                if not found:
+                    raise EngineError("response_drift", f"Records not found at {resp_cfg.get('items_path')}", result.http_status)
+            result.output = {"items": collected, "count": len(collected)}
+            result.status = "succeeded"
         else:
-            output, missing = map_output(resp_cfg, first_body)
-        result.diagnostics = {"response_shape": jsonpath.shape(first_body)}
-        result.output = output
-        if missing:
-            result.diagnostics["missing_fields"] = missing
-            raise EngineError("response_drift", "Expected fields missing from response: " + ", ".join(missing), result.http_status)
-        result.status = "succeeded"
+            if pag:
+                items_cfg = {**resp_cfg, "items_path": "$"}
+                output, missing = map_output(items_cfg, collected)
+            else:
+                output, missing = map_output(resp_cfg, first_body)
+            result.output = output
+            if missing:
+                result.diagnostics["missing_fields"] = missing
+                raise EngineError("response_drift", "Expected fields missing from response: " + ", ".join(missing), result.http_status)
+            result.status = "succeeded"
     except EngineError as e:
         result.error_class = e.error_class
         result.error = str(e)
         if e.http_status:
             result.http_status = e.http_status
+        if waits:
+            result.diagnostics["retry_waits"] = waits
     except (KeyError, TypeError) as e:
         result.error_class = "config_error"
         result.error = f"Configuration error: {e}"
     result.duration_ms = int((time.monotonic() - started) * 1000)
     return result
+
+
+def _next_link(headers: dict, current_url: str) -> str | None:
+    """RFC 8288 ``Link: <url>; rel="next"``. Only same-host, same-path links are followed (no SSRF via the header)."""
+    value = next((v for k, v in headers.items() if k.lower() == "link"), "")
+    for part in re.split(r",\s*(?=<)", value):
+        m = re.match(r'\s*<([^>]+)>(.*)', part)
+        if m and re.search(r'rel="?next"?', m.group(2)):
+            url = m.group(1)
+            a, b = urlsplit(url), urlsplit(current_url)
+            if (a.netloc, a.path) == (b.netloc, b.path):
+                return url
+    return None
 
 
 def preview(config: dict, op_id: str, inputs: dict) -> dict:
@@ -349,7 +574,8 @@ def preview(config: dict, op_id: str, inputs: dict) -> dict:
     if req is None:
         return {"ok": False, "errors": problems}
     auth = config["integration"].get("authentication") or {"type": "none"}
-    placeholder = {"token": "x", "api_key": "x", "username": "x", "password": "x"}
+    placeholder = {"token": "x", "api_key": "x", "username": "x", "password": "x", "client_id": "x", "client_secret": "x",
+                   "access_key_id": "x", "secret_access_key": "x"}
     apply_auth(req, auth, placeholder)
     out = {"ok": True, "request": redact(req, auth)}
     try:

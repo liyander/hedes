@@ -9,10 +9,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import ai, approvals, auth, connections, integrations, runtime, workflows
+from .api import ai, approvals, auth, connections, integrations, runtime, sources, workflows
 from .core.config import STATIC_DIR, get_settings
 from .core.db import init_db, session_scope
 from .mock import services as mock_services
+from .services.ingest import scheduler_loop as ingest_scheduler_loop
 from .services.workflows import scheduler_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -28,6 +29,7 @@ async def lifespan(_app: FastAPI):
         seed.run(db)
     if get_settings().run_scheduler:
         threading.Thread(target=scheduler_loop, args=(_stop,), name="scheduler", daemon=True).start()
+        threading.Thread(target=ingest_scheduler_loop, args=(_stop,), name="ingest-scheduler", daemon=True).start()
     yield
     _stop.set()
 
@@ -36,7 +38,7 @@ app = FastAPI(title="IntegraAI", version="1.0.0", lifespan=lifespan,
               description="AI-assisted, configuration-driven integration platform with admin-governed activation.")
 
 for r in (auth.router, ai.router, integrations.router, approvals.router, connections.router, runtime.router,
-          runtime.mcp_router, workflows.router, workflows.hooks_router, mock_services.router):
+          runtime.mcp_router, sources.router, workflows.router, workflows.hooks_router, mock_services.router):
     app.include_router(r)
 
 CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; "

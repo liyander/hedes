@@ -33,6 +33,22 @@ No AI key is needed: the built-in offline model implements every agent determini
 
 Tests: `cd backend && python -m pytest tests -q` (unit tests plus an end-to-end run of the demo against a live server).
 
+## Config-driven data sources (Okta, AWS CloudTrail, firewall)
+
+Three connectors ship as pure configuration (`examples/okta.yaml`, `aws-cloudtrail.yaml`, `firewall.yaml`) and are
+installed and approved on first start, each against a bundled mock API that behaves like the real thing:
+
+| Source | Auth | Pagination | Timestamps | What it exercises |
+| --- | --- | --- | --- | --- |
+| Okta System Log | `ssws` token | `Link: rel="next"` header | ISO-8601 | severity/outcome value maps |
+| AWS CloudTrail | `aws_sigv4` (request signing) | `NextToken` in the body | epoch seconds | the mock verifies the signature |
+| Firewall logs | API key header | `offset` + `limit` | epoch milliseconds | malformed records, 429 + `Retry-After` |
+
+Adding a fourth source means writing a YAML file: the login, the endpoint, the pagination style, the schedule and an
+`ingest.fields` mapping. Open **Data Sources** to see every connection's health, last/next run, records ingested and
+rejected, and credential age. *Simulate new data* adds fresh records so a re-run ingests only what is new;
+*Toggle firewall throttling* makes the firewall answer 429 so you can watch retries honour `Retry-After`.
+
 ## Demo script (≈5 minutes)
 
 1. **builder** → *AI Studio* → “I want to connect another task-management service and create tasks automatically.”
@@ -58,7 +74,8 @@ Tests: `cd backend && python -m pytest tests -q` (unit tests plus an end-to-end 
 | Area | Where |
 | --- | --- |
 | Integration schema (the contract) | `shared/integration.schema.json`, `shared/workflow.schema.json` |
-| Generic engine: templated path/query/headers/JSON/form bodies, 5 auth types, pagination (page/cursor), timeouts, idempotent-only retries with backoff + Retry-After, 2 MB cap, JSONPath mapping, error classification | `backend/app/services/engine.py` |
+| Generic engine: templated path/query/headers/JSON/form bodies, 8 auth types (bearer, API key, basic, Okta SSWS, OAuth2 client credentials with token caching, AWS SigV4), pagination (page, cursor, offset, `Link` header), timeouts, idempotent-only retries with exponential backoff + jitter + `Retry-After`/rate-limit-reset hints, per-connector requests-per-minute cap, 2 MB cap, JSONPath mapping, error classification | `backend/app/services/engine.py` |
+| Data-source ingestion: an operation's `ingest` block maps any API into one common event format (`event_id, timestamp, category, action, actor, target, outcome, severity, message`); incremental pulls from a saved high-water mark, de-duplication, per-record validation with a dead-letter queue, run history, per-connection health, credential expiry/rotation alerts | `services/ingest.py`, `api/sources.py`, UI *Data Sources* |
 | Restricted templates (`${inputs.x}`) and JSONPath subset - no `eval` | `services/templates.py`, `services/jsonpath.py` |
 | SSRF/egress: scheme, private/link-local/metadata IPs (DNS-resolved), no redirects, org domain allow-list | `services/egress.py` |
 | Validation + deterministic security review (inline secrets, forbidden headers, destructive ops, scopes, credential binding) | `services/validation.py`, `services/security_review.py` |

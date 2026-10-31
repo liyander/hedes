@@ -1,0 +1,45 @@
+schema_version: "1.0"
+integration:
+  id: aws-cloudtrail
+  name: AWS CloudTrail
+  version: "1.0.0"
+  transport: http
+  description: Pulls CloudTrail management events into the common event format. Requests are signed with AWS Signature V4. Bundled mock.
+  base_url: ${PUBLIC_BASE_URL}/mock/aws/cloudtrail
+  authentication:
+    type: aws_sigv4
+    credential_ref: aws-cloudtrail
+    region: us-east-1
+    service: cloudtrail
+  rate_limit: {requests_per_minute: 120}
+  operations:
+    - id: lookup_events
+      description: Look up recent CloudTrail management events
+      method: GET
+      path: /events
+      input_schema:
+        type: object
+        properties: {}
+      request:
+        query: {MaxResults: "10"}
+      pagination: {type: cursor, cursor_param: NextToken, next_cursor_path: "$.NextToken", max_pages: 30}
+      retry: {max_attempts: 3, backoff_seconds: 1}
+      response:
+        status_codes: [200]
+        items_path: "$.Events"
+      ingest:
+        category: cloud
+        fields:
+          event_id: "$.EventId"
+          timestamp: "$.EventTime"
+          actor: "$.Username"
+          action: "$.EventName"
+          target: "$.Resources[0].ResourceName"
+          outcome: "$.ErrorCode"
+          severity: "$.EventName"
+        defaults: {outcome: success}
+        value_maps:
+          outcome: {AccessDenied: failure, UnauthorizedOperation: failure}
+          severity: {StopLogging: critical, DeleteTrail: critical, PutBucketPolicy: high, AttachUserPolicy: high, CreateAccessKey: medium, ConsoleLogin: low}
+        incremental: {param: StartTime, format: epoch_seconds, overlap_seconds: 60}
+        schedule: {interval_minutes: 10}

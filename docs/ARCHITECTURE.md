@@ -71,3 +71,29 @@ usage_records, ai_sessions (requirements + per-stage state), ai_messages, integr
 (config, config_hash, validation, security_report), connections, tools, approval_requests, approval_events, test_runs,
 workflows, workflow_versions, workflow_runs, workflow_steps, executions, repair_proposals, alerts, audit_logs,
 webhook_deliveries. UUID string keys; every tenant-owned row carries `organization_id` and every query filters on it.
+
+## Data-source ingestion
+
+An operation may carry an `ingest` block (`shared/integration.schema.json`). The platform, not the connector, owns
+everything around it:
+
+```
+scheduler (15 s tick) -> IngestSource (interval, high-water mark, health)
+   -> engine.execute(raw=True, query_overrides={since: watermark - overlap})   # pagination, auth, retries, throttle
+   -> normalize(record, ingest.fields, value_maps, defaults)                   # common format, per record
+        ok       -> NormalizedEvent   (unique per org + integration + event_id: de-duplication)
+        invalid  -> DeadLetter        (reasons + raw record, parked once by fingerprint)
+   -> IngestRun (fetched / stored / duplicates / rejected) + a mirrored Execution (alerts, drift, metrics)
+```
+
+* **Common format**: `event_id, timestamp (UTC), category, action, actor, target, outcome (success|failure|unknown),
+  severity (info..critical), message`, plus the original record. `value_maps` translate vendor vocabularies;
+  timestamps accept ISO-8601, epoch seconds or milliseconds.
+* **Incremental**: the newest ingested timestamp is stored per source; the next run asks the API only for newer data
+  (minus a small overlap that de-duplication absorbs). *Re-read full history* clears it.
+* **Resilience**: retries use exponential backoff with jitter and honour `Retry-After`/rate-limit-reset; `rate_limit`
+  caps requests per minute per connector; a failing source backs off (max 1 h) and is flagged `failing`/`stale`.
+* **Health** (`GET /api/v1/sources`): healthy, degraded (many rejected records), stale, failing (with the
+  classified error and a suggested fix), paused, pending.
+* **Credentials**: optional expiry and rotation age; expired secrets are never used, and alerts fire a week before
+  expiry and after the org's rotation period (default 90 days).

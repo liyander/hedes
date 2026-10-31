@@ -1,6 +1,9 @@
 """Credential connections. Secrets go straight into the vault; the API only ever returns a masked hint."""
 from __future__ import annotations
 
+import copy
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -14,7 +17,9 @@ from ..services.integrations import org_policy
 from .common import iso, username
 
 router = APIRouter(prefix="/api/v1/connections", tags=["credentials"])
-AUTH_TYPES = "^(bearer|api_key_header|api_key_query|basic)$"
+AUTH_TYPES = "^(bearer|api_key_header|api_key_query|basic|ssws|oauth2_client_credentials|aws_sigv4)$"
+EXPIRY_WARN_DAYS = 7
+ROTATION_DAYS = 90
 
 
 class ConnectionIn(BaseModel):
@@ -24,12 +29,31 @@ class ConnectionIn(BaseModel):
     api_key: str | None = Field(default=None, max_length=4000)
     username: str | None = Field(default=None, max_length=255)
     password: str | None = Field(default=None, max_length=4000)
+    client_id: str | None = Field(default=None, max_length=500)
+    client_secret: str | None = Field(default=None, max_length=4000)
+    access_key_id: str | None = Field(default=None, max_length=128)
+    secret_access_key: str | None = Field(default=None, max_length=4000)
+    session_token: str | None = Field(default=None, max_length=8000)
+    expires_at: datetime | None = None
     test_url: str = Field(default="", max_length=500)
 
 
+def _naive_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+
+
 def _payload(body) -> tuple[dict, str]:
-    if body.auth_type == "bearer" and body.token:
+    if body.auth_type in ("bearer", "ssws") and body.token:
         return {"token": body.token.strip()}, vault.mask(body.token.strip())
+    if body.auth_type == "oauth2_client_credentials" and body.client_id and body.client_secret:
+        return {"client_id": body.client_id.strip(), "client_secret": body.client_secret.strip()}, f"{body.client_id.strip()[:12]} / ••••"
+    if body.auth_type == "aws_sigv4" and body.access_key_id and body.secret_access_key:
+        payload = {"access_key_id": body.access_key_id.strip(), "secret_access_key": body.secret_access_key.strip()}
+        if body.session_token:
+            payload["session_token"] = body.session_token.strip()
+        return payload, vault.mask(body.access_key_id.strip())
     if body.auth_type.startswith("api_key") and body.api_key:
         return {"api_key": body.api_key.strip()}, vault.mask(body.api_key.strip())
     if body.auth_type == "basic" and body.username and body.password:
@@ -43,8 +67,21 @@ def view(db: Session, c: Connection) -> dict:
         v = db.get(IntegrationVersion, i.published_version_id or i.latest_version_id) if (i.published_version_id or i.latest_version_id) else None
         if v and (v.config["integration"].get("authentication") or {}).get("credential_ref") == c.name:
             used_by.append({"id": i.id, "name": i.name})
+    now = utcnow()
+    age_days = (now - (c.rotated_at or c.created_at)).days
+    expires_in = (c.expires_at - now).days if c.expires_at else None
+    warnings = []
+    if c.status == "active":
+        if c.expires_at and c.expires_at <= now:
+            warnings.append("expired")
+        elif expires_in is not None and expires_in <= EXPIRY_WARN_DAYS:
+            warnings.append("expiring")
+        if age_days > ROTATION_DAYS:
+            warnings.append("rotation_due")
     return {"id": c.id, "name": c.name, "auth_type": c.auth_type, "hint": c.hint, "status": c.status, "test_url": c.test_url,
             "last_tested_at": iso(c.last_tested_at), "last_test_result": c.last_test_result,
+            "expires_at": iso(c.expires_at), "expires_in_days": expires_in, "rotated_at": iso(c.rotated_at), "age_days": age_days,
+            "last_used_at": iso(c.last_used_at), "warnings": warnings,
             "created_by": username(db, c.created_by), "created_at": iso(c.created_at), "used_by": used_by}
 
 
@@ -69,7 +106,8 @@ def create_connection(body: ConnectionIn, p: Principal = Depends(require_role("u
         db.delete(existing)
         db.flush()
     c = Connection(organization_id=p.org_id, name=body.name, auth_type=body.auth_type, hint=hint, test_url=body.test_url,
-                   secret_ref=vault.store_secret(db, p.org_id, payload), created_by=p.id)
+                   secret_ref=vault.store_secret(db, p.org_id, payload), created_by=p.id, rotated_at=utcnow(),
+                   expires_at=_naive_utc(body.expires_at))
     db.add(c)
     audit.record(db, p.org_id, p, "connection.create", body.name, auth_type=body.auth_type)
     db.commit()
@@ -91,6 +129,12 @@ class RotateIn(BaseModel):
     api_key: str | None = None
     username: str | None = None
     password: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
+    access_key_id: str | None = None
+    secret_access_key: str | None = None
+    session_token: str | None = None
+    expires_at: datetime | None = None  # the new secret's expiry (omit when it does not expire)
 
 
 @router.put("/{cid}/secret")
@@ -101,7 +145,21 @@ def rotate_secret(cid: str, body: RotateIn, p: Principal = Depends(require_role(
     payload, hint = _payload(body)
     vault.delete_secret(db, c.secret_ref)
     c.secret_ref, c.hint, c.status = vault.store_secret(db, p.org_id, payload), hint, "active"
+    c.rotated_at, c.expires_at = utcnow(), _naive_utc(body.expires_at)
     audit.record(db, p.org_id, p, "connection.rotate", c.name)
+    db.commit()
+    return view(db, c)
+
+
+class ExpiryIn(BaseModel):
+    expires_at: datetime | None = None
+
+
+@router.put("/{cid}/expiry")
+def set_expiry(cid: str, body: ExpiryIn, p: Principal = Depends(require_role("user")), db: Session = Depends(get_db)):
+    c = _owned(db, p, cid)
+    c.expires_at = _naive_utc(body.expires_at)
+    audit.record(db, p.org_id, p, "connection.expiry", c.name, expires_at=str(c.expires_at))
     db.commit()
     return view(db, c)
 
@@ -113,6 +171,8 @@ def test_connection(cid: str, p: Principal = Depends(require_role("user")), db: 
         raise HTTPException(409, "Connection is revoked")
     secret = vault.read_secret(db, c.secret_ref, p.org_id)
     target = None
+    if c.test_url and c.auth_type in ("oauth2_client_credentials", "aws_sigv4"):
+        return {"ok": None, "message": "This credential type cannot be probed with a bare URL. Use “Run now” on the data source, or Test Lab."}
     if c.test_url:
         base, path = c.test_url.rstrip("/"), ""
         target = {"schema_version": "1.0", "integration": {"id": "conn-test", "name": "test", "version": "1.0.0", "transport": "http",
@@ -127,13 +187,16 @@ def test_connection(cid: str, p: Principal = Depends(require_role("user")), db: 
             op = next((o for o in v.config["integration"]["operations"] if o["method"] == "GET"
                        and not (o["input_schema"].get("required")) and "{" not in o["path"]), None)
             if op:
-                target, op_id = v.config, op["id"]
+                # Probe one page only: ingestion operations paginate heavily.
+                target, op_id = copy.deepcopy(v.config), op["id"]
+                next(o for o in target["integration"]["operations"] if o["id"] == op_id).pop("pagination", None)
                 break
     if not target:
         return {"ok": None, "message": "Nothing safe to test against: no read-only operation without inputs uses this connection. Set a test URL."}
     res = engine.execute(target, op_id, {}, credential=secret, allowed_domains=org_policy(db, p.org_id).get("allowed_domains") or [])
     ok = res.status == "succeeded" or res.error_class == "response_drift"
     c.last_tested_at = utcnow()
+    c.last_used_at = utcnow()
     c.last_test_result = "ok" if ok else f"{res.error_class}: {res.error[:150]}"
     if res.error_class == "auth_invalid":
         c.status = "invalid"

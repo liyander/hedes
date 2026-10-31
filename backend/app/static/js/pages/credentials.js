@@ -1,12 +1,18 @@
-import { $, api, esc, icon, badge, agoCell, pageHead, emptyState, modal, toast, confirmBox } from '../lib.js';
+import { $, api, esc, icon, badge, agoCell, pageHead, emptyState, modal, toast, confirmBox, fmtTime } from '../lib.js';
 import { route } from '../app.js';
 
-const AUTH_LABEL = { bearer: 'Bearer token', api_key_header: 'API key (header)', api_key_query: 'API key (query)', basic: 'Username + password' };
+const AUTH_LABEL = { bearer: 'Bearer token', api_key_header: 'API key (header)', api_key_query: 'API key (query)', basic: 'Username + password',
+  ssws: 'Okta API token (SSWS)', oauth2_client_credentials: 'OAuth2 client credentials', aws_sigv4: 'AWS access key (SigV4)' };
 
 function secretFields(auth) {
   if (auth === 'basic') return `<div class="grid-2"><div class="field"><label>Username / email</label><input type="text" name="username" autocomplete="off" required></div>
     <div class="field"><label>Password or API token</label><input type="password" name="password" autocomplete="new-password" required></div></div>`;
-  if (auth === 'bearer') return '<div class="field"><label>Token</label><input type="password" name="token" autocomplete="new-password" required></div>';
+  if (auth === 'oauth2_client_credentials') return `<div class="grid-2"><div class="field"><label>Client ID</label><input type="text" name="client_id" autocomplete="off" required></div>
+    <div class="field"><label>Client secret</label><input type="password" name="client_secret" autocomplete="new-password" required></div></div>`;
+  if (auth === 'aws_sigv4') return `<div class="grid-2"><div class="field"><label>Access key ID</label><input type="text" name="access_key_id" autocomplete="off" required></div>
+    <div class="field"><label>Secret access key</label><input type="password" name="secret_access_key" autocomplete="new-password" required></div></div>
+    <div class="field"><label>Session token (optional)</label><input type="password" name="session_token" autocomplete="new-password"><div class="hint">Only for temporary STS credentials.</div></div>`;
+  if (auth === 'bearer' || auth === 'ssws') return '<div class="field"><label>Token</label><input type="password" name="token" autocomplete="new-password" required></div>';
   return '<div class="field"><label>API key</label><input type="password" name="api_key" autocomplete="new-password" required></div>';
 }
 
@@ -19,6 +25,7 @@ export async function connectModal({ name = '', auth_type = 'bearer', header = '
       <div class="field"><label>Type</label><select name="auth_type" ${fixed || rotateId ? 'disabled' : ''}>${Object.entries(AUTH_LABEL).map(([k, v]) => `<option value="${k}" ${k === auth_type ? 'selected' : ''}>${v}</option>`).join('')}</select>${header ? `<div class="hint">Sent as header <code>${esc(header)}</code></div>` : ''}</div>
     </div>
     <div id="secret">${secretFields(auth_type)}</div>
+    <div class="field"><label>Expires on (optional)</label><input type="date" name="expires_at"><div class="hint">You are alerted a week before, and executions stop using an expired secret.</div></div>
     ${rotateId ? '' : '<div class="field"><label>Test URL (optional)</label><input type="url" name="test_url" placeholder="https://api.example.com/user"><div class="hint">A read-only endpoint used by “Test connection”.</div></div>'}
     ${name === 'taskflow' ? '<div class="callout info small">Demo: the bundled TaskFlow mock API accepts the token <code>taskflow-demo-token</code>.</div>' : ''}`;
   return modal({
@@ -30,6 +37,8 @@ export async function connectModal({ name = '', auth_type = 'bearer', header = '
     actions: [{ label: 'Cancel', value: null }, {
       label: rotateId ? 'Save new secret' : 'Save connection', cls: 'primary', handler: async (root) => {
         const v = Object.fromEntries([...root.querySelectorAll('[name]')].map((i) => [i.name, i.value]));
+        if (v.expires_at) v.expires_at = `${v.expires_at}T23:59:59Z`; else delete v.expires_at;
+        if (!v.session_token) delete v.session_token;
         const form = root.querySelector('.modal-body');
         if ([...form.querySelectorAll('[required]')].some((i) => !i.value)) { toast('Fill in the required fields', 'bad'); return false; }
         const res = rotateId
@@ -47,9 +56,11 @@ export async function render({ el }) {
   el.innerHTML = `<div class="page">
     ${pageHead('key', 'Credentials', 'External API credentials, stored encrypted and referenced by name. Integrations never contain secrets, and the AI never sees them.',
       `<button class="btn primary" id="new">${icon('plus', 16)} Connect credential</button>`)}
-    <div class="card">${rows.length ? `<div class="table-scroll"><table><thead><tr><th>Name</th><th>Type</th><th>Secret</th><th>Status</th><th>Used by</th><th>Last test</th><th></th></tr></thead><tbody>
+    <div class="card">${rows.length ? `<div class="table-scroll"><table><thead><tr><th>Name</th><th>Type</th><th>Secret</th><th>Status</th><th>Lifetime</th><th>Used by</th><th>Last test</th><th></th></tr></thead><tbody>
       ${rows.map((c) => `<tr><td><b class="mono">${esc(c.name)}</b><div class="muted small">by ${esc(c.created_by)} · ${agoCell(c.created_at)}</div></td>
         <td>${esc(AUTH_LABEL[c.auth_type] || c.auth_type)}</td><td class="mono">${esc(c.hint || '—')}</td><td>${badge(c.status)}</td>
+        <td class="small">${c.status === 'revoked' ? '<span class="muted">—</span>' : `${c.age_days} d since rotation${c.expires_at ? `<div class="muted">expires ${esc(fmtTime(c.expires_at))}</div>` : ''}`}
+          ${c.warnings.map((w) => `<div>${badge(w === 'rotation_due' ? 'medium' : 'critical', w === 'expired' ? 'expired' : w === 'expiring' ? 'expires soon' : 'rotation due')}</div>`).join('')}</td>
         <td>${c.used_by.map((u) => `<a class="link" href="#/integrations/${u.id}">${esc(u.name)}</a>`).join(', ') || '<span class="muted">—</span>'}</td>
         <td class="small">${c.last_tested_at ? `${esc(c.last_test_result)}<div class="muted">${agoCell(c.last_tested_at)}</div>` : '<span class="muted">never</span>'}</td>
         <td class="nowrap"><button class="btn sm" data-test="${c.id}" ${c.status === 'revoked' ? 'disabled' : ''}>Test</button>

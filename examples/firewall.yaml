@@ -1,0 +1,42 @@
+schema_version: "1.0"
+integration:
+  id: firewall
+  name: Perimeter Firewall Logs
+  version: "1.0.0"
+  transport: http
+  description: Pulls traffic logs from a firewall management API into the common event format. Offset pagination, rate limiting and malformed records. Bundled mock.
+  base_url: ${PUBLIC_BASE_URL}/mock/firewall
+  authentication:
+    type: api_key_header
+    header_name: X-API-Key
+    credential_ref: firewall
+  rate_limit: {requests_per_minute: 60}
+  operations:
+    - id: list_traffic_logs
+      description: Read traffic log entries from the firewall
+      method: GET
+      path: /api/logs
+      input_schema:
+        type: object
+        properties: {}
+      pagination: {type: offset, offset_param: offset, size_param: limit, size: 25, total_path: "$.total", max_pages: 40}
+      retry: {max_attempts: 4, backoff_seconds: 0.5, max_wait_seconds: 20}
+      response:
+        status_codes: [200]
+        items_path: "$.logs"
+      ingest:
+        category: network
+        fields:
+          event_id: "$.session_id"
+          timestamp: "$.ts"
+          actor: "$.src_ip"
+          action: "$.action"
+          target: "$.dst_ip"
+          outcome: "$.action"
+          severity: "$.threat_level"
+          message: "$.rule"
+        value_maps:
+          outcome: {allow: success, deny: failure, drop: failure}
+          severity: {"0": info, "1": low, "2": low, "3": medium, "4": high, "5": critical}
+        incremental: {param: since, format: epoch_millis, overlap_seconds: 30}
+        schedule: {interval_minutes: 5}

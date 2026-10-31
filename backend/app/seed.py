@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 from .core.config import DATA_DIR, get_settings
 from .core.db import utcnow
 from .core.security import hash_password
-from .mock.services import NOTIFY_KEY
-from .models import AIModel, AIProvider, ApprovalEvent, ApprovalRequest, Connection, Membership, Organization, User
+from .mock.services import (AWS_ACCESS_KEY, AWS_SECRET_KEY, FIREWALL_KEY, NOTIFY_KEY, OKTA_TOKEN)
+from .models import (AIModel, AIProvider, ApprovalEvent, ApprovalRequest, Connection, Integration, Membership, Organization,
+                     User)
 from .services import audit, catalog, integrations, vault
 
 log = logging.getLogger("integra.seed")
@@ -61,10 +62,37 @@ def _publish_seed(db: Session, org: Organization, builder: User, admin: User, sl
     audit.record(db, org.id, "setup", "integration.publish", f"{slug}@{v.version}", seeded=True)
 
 
+DEMO_SOURCES = [  # (slug, connection name, auth type, secret)
+    ("okta", "okta", "ssws", {"token": OKTA_TOKEN}),
+    ("aws-cloudtrail", "aws-cloudtrail", "aws_sigv4", {"access_key_id": AWS_ACCESS_KEY, "secret_access_key": AWS_SECRET_KEY}),
+    ("firewall", "firewall", "api_key_header", {"api_key": FIREWALL_KEY}),
+]
+
+
+def ensure_demo_sources(db: Session) -> None:
+    """Install the three bundled data sources once (also for databases created before they existed)."""
+    org = db.scalars(select(Organization).order_by(Organization.created_at)).first()
+    builder = db.scalars(select(User).where(User.username == "builder")).first()
+    admin = db.scalars(select(User).where(User.username == "admin")).first()
+    if not (org and builder and admin) or (org.policy or {}).get("demo_sources_seeded"):
+        return
+    for slug, conn_name, auth_type, secret in DEMO_SOURCES:
+        if not db.scalars(select(Connection).where(Connection.organization_id == org.id, Connection.name == conn_name)).first():
+            main = next(iter(secret.values()))
+            db.add(Connection(organization_id=org.id, name=conn_name, auth_type=auth_type, secret_ref=vault.store_secret(db, org.id, secret),
+                              hint=vault.mask(main), created_by=admin.id, rotated_at=utcnow()))
+        db.flush()
+        if not db.scalars(select(Integration).where(Integration.organization_id == org.id, Integration.slug == slug)).first():
+            _publish_seed(db, org, builder, admin, slug)
+    org.policy = {**(org.policy or {}), "demo_sources_seeded": True}
+    db.commit()
+
+
 def run(db: Session) -> None:
     seed_ai_providers(db)
     if db.scalars(select(User)).first():
         db.commit()
+        ensure_demo_sources(db)
         return
     s = get_settings()
     password = s.seed_password or secrets.token_urlsafe(10)
@@ -87,6 +115,7 @@ def run(db: Session) -> None:
         _publish_seed(db, org, users["user"], users["admin"], slug)
     audit.record(db, org.id, "setup", "platform.seed", org.name)
     db.commit()
+    ensure_demo_sources(db)
     if not s.seed_password:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         (DATA_DIR / "seed-credentials.txt").write_text(

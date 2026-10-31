@@ -410,7 +410,8 @@ def generate_tests(config: dict, documents: list[dict]) -> list[dict]:
             body = documented["response_example"] if documented.get("response_example") is not None else openapi.sample_value(documented["response_schema"])
             origin = "documented response schema"
         else:
-            body = _doc_from_mapping(op["response"])
+            resp = {**op["response"], "mapping": op["ingest"]["fields"]} if op.get("ingest") and not op["response"].get("mapping") else op["response"]
+            body = _doc_from_mapping(resp)
             origin = "synthesised from mapping"
         if status == 204:
             body = None

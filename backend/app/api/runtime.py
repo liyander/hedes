@@ -254,6 +254,24 @@ def demo_state(p: Principal = Depends(current_principal)):
     return mock.snapshot()
 
 
+class FeedIn(BaseModel):
+    okta: int = Field(0, ge=0, le=500)
+    aws: int = Field(0, ge=0, le=500)
+    firewall: int = Field(0, ge=0, le=500)
+    firewall_flaky: bool | None = None
+
+
+@router.post("/demo/feeds")
+def demo_feeds(body: FeedIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
+    """Add fresh records to the bundled Okta / CloudTrail / firewall mocks and optionally make the firewall rate-limit."""
+    made = mock.emit(body.model_dump())
+    if body.firewall_flaky is not None:
+        mock.set_firewall_flaky(body.firewall_flaky)
+    audit.record(db, p.org_id, p, "demo.feeds", "mock data sources", emitted=made, firewall_flaky=body.firewall_flaky)
+    db.commit()
+    return mock.snapshot()
+
+
 @router.post("/demo/drift")
 def demo_drift(body: DriftIn, p: Principal = Depends(require_human("admin")), db: Session = Depends(get_db)):
     mock.set_drift(body.enabled)
