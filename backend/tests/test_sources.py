@@ -374,3 +374,34 @@ def test_builder_can_run_but_not_govern_sources(server, builder):
     assert builder.patch(f"/api/v1/sources/{s['id']}", json={"enabled": False}).status_code == 403
     assert builder.post(f"/api/v1/sources/{s['id']}/reset").status_code == 403
     assert builder.post("/api/v1/demo/feeds", json={"okta": 1}).status_code == 403
+
+
+def test_stale_running_state_from_a_crash_does_not_block_the_source(server, admin):
+    from app.core.db import session_scope, utcnow
+    from app.models import IngestSource
+    sid = _sources(admin)["okta"]["id"]
+    with session_scope() as db:
+        src = db.get(IngestSource, sid)
+        src.state, src.next_run_at = "running", utcnow() - timedelta(minutes=1)  # as left by a process killed mid-run
+    with session_scope() as db:
+        assert sid in ingest.due_sources(db)
+        assert ingest.health(db.get(IngestSource, sid))["status"] != "running"
+
+
+def test_acknowledged_credential_alert_is_not_raised_again_the_same_day(server, admin):
+    from app.core.db import session_scope, utcnow
+    from app.models import Connection
+    c = next(c for c in admin.get("/api/v1/connections").json() if c["name"] == "notify")
+    with session_scope() as db:
+        conn = db.get(Connection, c["id"])
+        original, conn.rotated_at = conn.rotated_at, utcnow() - timedelta(days=200)
+    try:
+        with session_scope() as db:
+            assert ingest.credential_hygiene(db) == 1
+        alert = next(a for a in admin.get("/api/v1/alerts").json() if a["kind"] == "credential")
+        assert admin.post(f"/api/v1/alerts/{alert['id']}/ack").status_code == 200
+        with session_scope() as db:
+            assert ingest.credential_hygiene(db) == 0
+    finally:
+        with session_scope() as db:
+            db.get(Connection, c["id"]).rotated_at = original

@@ -357,7 +357,7 @@ def health(src: IngestSource, now: datetime | None = None) -> dict:
     now = now or utcnow()
     if not src.enabled:
         return {"status": "paused", "reason": "Paused"}
-    if src.state == "running":
+    if is_running(src.id):  # in-memory: a persisted "running" left by a crashed process must not stick
         return {"status": "running", "reason": "Running now"}
     if not src.last_run_at:
         return {"status": "pending", "reason": "Has not run yet"}
@@ -388,7 +388,8 @@ def credential_hygiene(db: Session) -> int:
         elif rotation_days and now - (conn.rotated_at or conn.created_at) > timedelta(days=rotation_days):
             msg = f"Credential '{conn.name}' has not been rotated in over {rotation_days} days."
         # Alert.integration_id doubles as the subject id so each credential is de-duplicated on its own.
-        if msg and not monitoring._recent_alert(db, conn.organization_id, "credential", conn.id, minutes=60 * 24):
+        # Acknowledged alerts count too, so acknowledging one silences it for the day instead of re-raising it next hour.
+        if msg and not monitoring._recent_alert(db, conn.organization_id, "credential", conn.id, minutes=60 * 24, include_acknowledged=True):
             audit.alert(db, conn.organization_id, "credential", msg, severity, conn.id, "#/credentials")
             raised += 1
     return raised
@@ -396,17 +397,23 @@ def credential_hygiene(db: Session) -> int:
 
 # ----------------------------------------------------------------------------------------- scheduler
 
+def due_sources(db: Session) -> list[str]:
+    """Enabled sources whose next run is due. Uses the in-memory run registry, not the persisted state, so a source
+    left as "running" by a crashed or restarted process is picked up again."""
+    due: list[str] = []
+    for org_id in set(db.scalars(select(Integration.organization_id).distinct()).all()):
+        for src in sync_sources(db, org_id):
+            if src.enabled and not is_running(src.id) and (src.next_run_at is None or src.next_run_at <= utcnow()):
+                due.append(src.id)
+    return due
+
+
 def scheduler_loop(stop: threading.Event) -> None:
     ticks = 0
     while not stop.wait(15):
         try:
             with session_scope() as db:
-                org_ids = {i for i in db.scalars(select(Integration.organization_id).distinct()).all()}
-                due: list[str] = []
-                for org_id in org_ids:
-                    for src in sync_sources(db, org_id):
-                        if src.enabled and src.state != "running" and (src.next_run_at is None or src.next_run_at <= utcnow()):
-                            due.append(src.id)
+                due = due_sources(db)
                 if ticks % 240 == 0:  # roughly hourly
                     credential_hygiene(db)
             for sid in due:
