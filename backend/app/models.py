@@ -536,6 +536,8 @@ class AssistantThread(Base):
     organization_id: Mapped[str] = fk("organizations.id")
     user_id: Mapped[str] = fk("users.id")
     title: Mapped[str] = mapped_column(String(200), default="New conversation")
+    # set when the conversation lives in another channel, e.g. "slack:<channel>:<thread ts>"
+    external_ref: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     created_at: Mapped[datetime] = created()
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

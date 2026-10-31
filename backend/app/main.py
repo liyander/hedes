@@ -9,11 +9,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import ai, approvals, assistant, auth, connections, healing, integrations, notifications, runtime, sources, templates, users, whatsapp, workflows
+from .api import ai, approvals, assistant, auth, connections, healing, integrations, notifications, runtime, slack, sources, templates, users, whatsapp, workflows
 from .core.config import STATIC_DIR, get_settings
 from .core.db import init_db, session_scope
 from .mock import services as mock_services
-from .services import healing as _healing_hooks, notify, vault  # noqa: F401  (notify and healing register their after-commit hooks)
+from .services import healing as _healing_hooks, notify, slack_bot, vault  # noqa: F401  (notify and healing register their after-commit hooks)
 from .services.ingest import scheduler_loop as ingest_scheduler_loop
 from .services.workflows import scheduler_loop
 
@@ -31,6 +31,7 @@ async def lifespan(_app: FastAPI):
     if get_settings().run_scheduler:
         threading.Thread(target=scheduler_loop, args=(_stop,), name="scheduler", daemon=True).start()
         threading.Thread(target=ingest_scheduler_loop, args=(_stop,), name="ingest-scheduler", daemon=True).start()
+        threading.Thread(target=slack_bot.supervisor, args=(_stop,), name="slack-supervisor", daemon=True).start()
     yield
     _stop.set()
 
@@ -38,7 +39,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="H.E.D.E.S", version="1.0.0", lifespan=lifespan,
               description="AI-assisted, configuration-driven integration platform with admin-governed activation.")
 
-for r in (auth.router, users.router, healing.router, ai.router, integrations.router, approvals.router, connections.router, runtime.router,
+for r in (auth.router, users.router, slack.router, healing.router, ai.router, integrations.router, approvals.router, connections.router, runtime.router,
           runtime.mcp_router, notifications.router, assistant.router, sources.router, templates.router, workflows.router, workflows.hooks_router,
           whatsapp.router, whatsapp.fix_router):
     app.include_router(r)

@@ -24,7 +24,8 @@ from sqlalchemy.orm import Session
 from ..core.db import utcnow
 from ..core.security import Principal
 from ..models import (AIMessage, AISession, AssistantAction, AssistantMessage, AssistantThread, Connection, DeadLetter, Execution,
-                      IngestRun, IngestSource, Integration, IntegrationVersion, NormalizedEvent, Tool, Workflow, WorkflowVersion)
+                      HealingCase, IngestRun, IngestSource, Integration, IntegrationVersion, NormalizedEvent, Tool, Workflow, WorkflowRun,
+                      WorkflowStep, WorkflowVersion)
 from . import audit, catalog, help_content, ingest, integrations, monitoring, runtime
 from .ai_gateway import Gateway, ProviderError, wrap_document
 from .validation import validate_config
@@ -63,6 +64,15 @@ TOOLS: dict[str, tuple[bool, str, tuple, str]] = {
                         "(args: integration_id, base_url optional, paths optional {operation_id: new_path}). Creates a revision, runs the safe tests, "
                         "checks with a harmless request that each corrected endpoint exists, then publishes it and closes matching self-healing sessions."),
     "start_build_session": (True, "user", ("message",), "Open an AI Studio build session that drafts an integration from a description."),
+    "list_failures": (False, "user", (), "Recent failed executions: tool, error class, HTTP status, error message and what it means. args: limit, tool."),
+    "list_healing_cases": (False, "user", (), "Self-healing investigations: target, status, root cause and what is required. args: status."),
+    "get_healing_case": (False, "user", ("id",), "One self-healing case: root cause, every fix tried and its result, what is still failing, what an admin must do."),
+    "get_workflow": (False, "user", ("id",), "One workflow: trigger, steps (tool, inputs, conditions), validation and recent runs."),
+    "create_workflow": (True, "user", ("description",), "Draft a new workflow from a plain-language description using published tools. "
+                        "args: description, name. It is created as an inactive draft to review in Workflows."),
+    "run_workflow": (True, "user", ("workflow_id",), "Run a workflow now with its sample trigger payload. args: workflow_id, dry_run (default true: render "
+                     "requests without calling any API; false runs it for real)."),
+    "investigate_failure": (True, "user", ("execution_id",), "Start a self-healing investigation of one failed execution: trace the root cause and try safe fixes."),
     "request_credential": (False, "user", ("name", "auth_type"), "Show the user a secure form to connect a credential (you never see the secret). "
                            "args: name (the integration's credential_ref), auth_type, header_name (optional), template_id (optional, adds the provider's instructions)."),
 }
@@ -306,6 +316,39 @@ def run_read_tool(db: Session, p: Principal, name: str, args: dict) -> Any:
         if g["credential"]:
             g["credential"] |= credential_status(db, p.org_id, g["credential"]["name"])
         return g
+    if name == "list_failures":
+        q = select(Execution).where(Execution.organization_id == p.org_id, Execution.status == "failed")
+        if args.get("tool"):
+            q = q.where(Execution.tool_name == str(args["tool"]))
+        if not p.at_least("admin"):
+            q = q.where(Execution.actor_id == p.id)
+        from .engine import ERROR_GUIDE
+        return [{"execution_id": e.id, "time": str(e.created_at), "tool": e.tool_name, "error_class": e.error_class, "http_status": e.http_status,
+                 "error": e.error[:300], "meaning": ERROR_GUIDE.get(e.error_class, ("", ""))[0], "fix": ERROR_GUIDE.get(e.error_class, ("", ""))[1]}
+                for e in db.scalars(q.order_by(Execution.created_at.desc()).limit(min(int(args.get("limit") or 10), 25))).all()]
+    if name in ("list_healing_cases", "get_healing_case"):
+        from . import healing
+        if name == "get_healing_case":
+            c = db.get(HealingCase, str(args["id"]))
+            if not c or c.organization_id != p.org_id:
+                raise HTTPException(404, "Case not found")
+            return {"id": c.id, "status": c.status, "report": healing.report_text(c), "attempts": c.attempts, "evidence": _trim(c.evidence, 1500)}
+        q = select(HealingCase).where(HealingCase.organization_id == p.org_id)
+        if args.get("status"):
+            q = q.where(HealingCase.status == str(args["status"]))
+        return [{"id": c.id, "target": c.target, "status": c.status, "error_class": c.error_class, "root_cause": c.root_cause[:300],
+                 "required": c.required, "seen": c.occurrences, "updated": str(c.updated_at)}
+                for c in db.scalars(q.order_by(HealingCase.updated_at.desc()).limit(15)).all()]
+    if name == "get_workflow":
+        from . import workflows as wf_mod
+        w = db.get(Workflow, str(args["id"]))
+        if not w or w.organization_id != p.org_id:
+            raise HTTPException(404, "Workflow not found")
+        v = db.get(WorkflowVersion, w.current_version_id)
+        runs = db.scalars(select(WorkflowRun).where(WorkflowRun.workflow_id == w.id).order_by(WorkflowRun.started_at.desc()).limit(5)).all()
+        return {"id": w.id, "name": w.name, "status": w.status, "graph": v.graph if v else {},
+                "validation": wf_mod.validate(db, w, v.graph) if v else None,
+                "recent_runs": [{"status": r.status, "trigger": r.trigger, "dry_run": r.dry_run, "error": r.error, "at": str(r.started_at)} for r in runs]}
     if name == "validate_config":
         cfg = args["config"]
         return validate_config(catalog.normalize_config(cfg)) if isinstance(cfg, dict) and isinstance(cfg.get("integration"), dict) else {"valid": False, "errors": [{"message": "config must contain an 'integration' object"}]}
@@ -318,7 +361,7 @@ def execute_action(db: Session, p: Principal, act: AssistantAction) -> Any:
     needs_approval, role, required, _ = TOOLS[name]
     if RANK.get(p.role, 0) < RANK[role]:
         raise HTTPException(403, f"This action requires the {role} role")
-    if role == "admin" and p.via != "session":
+    if role == "admin" and p.via not in ("session", "slack"):  # slack: a linked person who clicked Approve themselves
         raise HTTPException(403, "This action requires an interactive administrator session")
     for r in required:
         if a.get(r) in (None, ""):
@@ -422,6 +465,47 @@ def execute_action(db: Session, p: Principal, act: AssistantAction) -> Any:
         db.commit()
         orchestrator.handle_message(db, s, str(a["message"])[:8000])
         return {"session_id": s.id, "open": f"#/studio/{s.id}"}
+    if name == "create_workflow":
+        from . import agents, workflows as wf_mod
+        actor = runtime.Actor(p.id, p.role, p.org_id, "user", p.user.username)
+        tools = wf_mod.tool_catalog(db, actor)
+        if not tools:
+            raise HTTPException(409, "There are no published tools yet - publish an integration first")
+        desc = str(a["description"])[:4000]
+        graph, model = agents.plan_workflow(Gateway(db, p.org_id), agents.requirements_from_tools(desc, tools), tools)
+        w = Workflow(organization_id=p.org_id, name=str(a.get("name") or desc.split(".")[0])[:160], description=desc, created_by=p.id)
+        db.add(w)
+        db.flush()
+        v = WorkflowVersion(workflow_id=w.id, version=1, graph=graph, created_by=p.id)
+        db.add(v)
+        db.flush()
+        w.current_version_id = v.id
+        check = wf_mod.validate(db, w, graph)
+        audit.record(db, p.org_id, p, "workflow.create", w.name, source="assistant")
+        return {"workflow_id": w.id, "name": w.name, "steps": [f"{n['id']}: {n['tool']}" for n in graph.get("nodes") or []],
+                "valid": check["valid"], "problems": [e["message"] for e in check["errors"] + check["warnings"]][:5], "open": f"#/workflows/{w.id}"}
+    if name == "run_workflow":
+        from . import workflows as wf_mod
+        w = db.get(Workflow, str(a["workflow_id"]))
+        if not w or w.organization_id != p.org_id:
+            raise HTTPException(404, "Workflow not found")
+        if w.created_by != p.id and not p.at_least("admin"):
+            raise HTTPException(403, "Only the workflow's owner or an administrator can run it")
+        v = db.get(WorkflowVersion, w.current_version_id)
+        run = wf_mod.execute(db, w, "manual", (v.graph.get("trigger") or {}).get("sample") or {}, dry_run=a.get("dry_run", True) is not False)
+        steps = db.scalars(select(WorkflowStep).where(WorkflowStep.run_id == run.id)).all()
+        return {"status": run.status, "dry_run": run.dry_run, "error": run.error,
+                "steps": [{"node": s.node_id, "status": s.status, "error": s.error[:200]} for s in steps]}
+    if name == "investigate_failure":
+        from . import healing
+        ex = db.get(Execution, str(a["execution_id"]))
+        if not ex or ex.organization_id != p.org_id or ex.status == "succeeded":
+            raise HTTPException(404, "No failed execution with that id")
+        integ = db.get(Integration, ex.integration_id) if ex.integration_id else None
+        if not integ:
+            raise HTTPException(409, "The integration of this execution no longer exists")
+        c = healing.on_failure(db, ex, integ, force=True)
+        return {"case_id": c.id, "status": "investigating", "note": "Ask me about this case in a moment (get_healing_case)."}
     raise HTTPException(400, f"Unknown action {name}")
 
 

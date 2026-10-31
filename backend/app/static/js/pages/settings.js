@@ -2,9 +2,9 @@ import { $, api, esc, icon, badge, agoCell, pageHead, modal, toast, confirmBox, 
 import { state, isAdmin, isOwner, route } from '../app.js';
 
 export async function render({ el }) {
-  const [org, tokens, demo, notif, tpl, wa, myWa] = await Promise.all([api('/organizations/current'), api('/tokens'), api('/demo/state'),
-    ...(isAdmin() ? [api('/settings/notifications'), api('/settings/notifications/templates'), api('/settings/whatsapp'), api('/me/whatsapp')]
-      : [null, null, null, null])]);
+  const [org, tokens, demo, notif, tpl, wa, myWa, slack] = await Promise.all([api('/organizations/current'), api('/tokens'), api('/demo/state'),
+    ...(isAdmin() ? [api('/settings/notifications'), api('/settings/notifications/templates'), api('/settings/whatsapp'), api('/me/whatsapp'), api('/settings/slack')]
+      : [null, null, null, null, null])]);
   const p = org.policy || {};
   const admin = isAdmin();
   const origin = location.origin;
@@ -41,6 +41,7 @@ export async function render({ el }) {
     ${notif ? notificationsCard(notif) : ''}
     ${tpl ? templatesCard(tpl) : ''}
     ${wa ? `<div class="split even">${whatsappCard(wa)}${myWhatsappCard(myWa)}</div>` : ''}
+    ${slack ? slackCard(slack) : ''}
     <div class="card"><div class="card-head"><h2>Members</h2><span class="spacer"></span>${admin ? `<button class="btn sm" id="invite">${icon('plus', 13)} Invite</button>` : ''}</div>
       <div class="table-scroll"><table><thead><tr><th>User</th><th>Email</th><th>Role</th></tr></thead><tbody>
       ${org.members.map((m) => `<tr><td><b>${esc(m.name || m.username)}</b> <span class="muted mono small">${esc(m.username)}</span></td><td>${esc(m.email)}</td>
@@ -88,6 +89,7 @@ export async function render({ el }) {
     e.target.disabled = false;
   });
   if (tpl) wireTemplates(el);
+  if (slack) wireSlack(el, slack);
   bindWhatsapp(el);
   $('#drift', el)?.addEventListener('click', async () => { await api('/demo/drift', { method: 'POST', body: { enabled: !demo.drift } }); route(); });
   $('#new-token', el).addEventListener('click', async () => {
@@ -326,5 +328,61 @@ function bindWhatsapp(el) {
     if (!await confirmBox('Remove your number', 'You will stop getting WhatsApp alerts.', 'Remove', 'danger-solid')) return;
     await api('/me/whatsapp', { method: 'DELETE' });
     route();
+  });
+}
+
+// Slack: administrators talk to the AI assistant from Slack (DM the app or @mention it). Socket Mode: no public URL needed.
+const SLACK_STATE = { connected: 'ok', connecting: 'running', error: 'failed', stopped: 'disabled' };
+
+function slackCard(s) {
+  const st = s.status || { state: 'stopped' };
+  return `<div class="card"><div class="card-head"><h2>Slack: talk to the AI</h2><span class="spacer"></span>
+      ${badge(SLACK_STATE[st.state] || '', s.enabled ? st.state : 'off')}${s.team ? ` <span class="muted small">${esc(s.team)} · @${esc(s.bot_name)}</span>` : ''}</div>
+    <div class="card-body" id="slack">
+      <p class="small muted" style="margin-top:0">Administrators can DM the H.E.D.E.S app or @mention it in a channel and do everything the AI assistant can:
+        ask about integrations, data sources and failures, discuss self-healing cases, create and run workflows, run tools. Every change shows
+        <b>Approve</b> / <b>Reject</b> buttons and runs only after the person who asked approves it. Secrets are never accepted in Slack.
+        It connects out to Slack (Socket Mode), so no public URL is needed.</p>
+      ${st.detail ? `<div class="callout ${st.state === 'error' ? 'bad' : 'info'} small" style="margin-bottom:10px">${esc(st.detail)}</div>` : ''}
+      <details ${s.configured ? '' : 'open'} style="margin-bottom:12px"><summary style="cursor:pointer"><b>Set up the Slack app (5 minutes)</b></summary>
+        <ol class="small" style="padding-left:18px;margin:8px 0">
+          <li>Go to <span class="mono">api.slack.com/apps</span> → <b>Create New App</b> → <b>From a manifest</b>, pick your workspace and paste the manifest below.</li>
+          <li><b>Install to Workspace</b>, then copy the <b>Bot User OAuth Token</b> (<span class="mono">xoxb-…</span>) from OAuth &amp; Permissions.</li>
+          <li><b>Basic Information → App-Level Tokens → Generate</b> with the scope <span class="mono">connections:write</span>; copy it (<span class="mono">xapp-…</span>).</li>
+          <li>Paste both tokens here, tick <b>Enabled</b> and save. Then each administrator presses <b>Link my Slack account</b>.</li></ol>
+        <div class="row between"><span class="small muted">App manifest</span><button type="button" class="btn sm" id="copy-manifest">${icon('copy', 13)} Copy</button></div>
+        <pre id="manifest" style="max-height:180px">${esc(JSON.stringify(s.manifest, null, 2))}</pre></details>
+      <div class="grid-2"><div class="field"><label>Bot User OAuth Token</label><input type="password" name="bot_token" autocomplete="new-password" placeholder="${s.configured ? 'saved - leave blank to keep' : 'xoxb-…'}"></div>
+        <div class="field"><label>App-level token (connections:write)</label><input type="password" name="app_token" autocomplete="new-password" placeholder="${s.configured ? 'saved - leave blank to keep' : 'xapp-…'}"></div></div>
+      <div class="row between"><label class="check"><input type="checkbox" name="slack_enabled" ${s.enabled ? 'checked' : ''}> Enabled</label><button class="btn primary" id="save-slack">Save</button></div>
+      <h3 class="small muted" style="margin:16px 0 6px">LINKED ADMINISTRATORS</h3>
+      ${(s.links || []).length ? s.links.map((l) => `<div class="op-row small"><span class="grow"><b>${esc(l.username)}</b> <span class="muted mono">${esc(l.slack_user)}</span></span>
+        <button class="btn sm danger" data-unlink="${esc(l.slack_user)}">Unlink</button></div>`).join('') : '<p class="muted small" style="margin:0">Nobody yet.</p>'}
+      <div class="row" style="margin-top:10px"><button class="btn" id="slack-link" ${s.enabled ? '' : 'disabled'}>${icon('link', 14)} Link my Slack account</button><span class="small" id="slack-code"></span></div>
+    </div></div>`;
+}
+
+function wireSlack(el, s) {
+  const root = $('#slack', el);
+  $('#copy-manifest', el)?.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(JSON.stringify(s.manifest, null, 2)); toast('Manifest copied', 'ok'); } catch (e) { toast('Select the manifest and copy it', 'bad'); }
+  });
+  $('#save-slack', el).addEventListener('click', async () => {
+    const body = { enabled: $('[name=slack_enabled]', root).checked };
+    const bot = $('[name=bot_token]', root).value.trim(), app = $('[name=app_token]', root).value.trim();
+    if (bot) body.bot_token = bot;
+    if (app) body.app_token = app;
+    try { await api('/settings/slack', { method: 'PUT', body }); toast('Slack settings saved', 'ok'); route(); } catch (err) { toast(err.message, 'bad'); }
+  });
+  $('#slack-link', el).addEventListener('click', async () => {
+    try {
+      const r = await api('/settings/slack/link-code', { method: 'POST' });
+      $('#slack-code', el).innerHTML = `In Slack, send the H.E.D.E.S app a direct message: <code>link ${esc(r.code)}</code> <span class="muted">(valid ${Math.round(r.expires_in / 60)} min)</span>`;
+    } catch (err) { toast(err.message, 'bad'); }
+  });
+  root.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-unlink]');
+    if (!b) return;
+    try { await api(`/settings/slack/links/${encodeURIComponent(b.dataset.unlink)}`, { method: 'DELETE' }); route(); } catch (err) { toast(err.message, 'bad'); }
   });
 }
