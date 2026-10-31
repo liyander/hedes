@@ -7,7 +7,7 @@ from __future__ import annotations
 
 CONCEPTS = [
     {"term": "Integration", "text": "A connection to an external service, described entirely by a configuration (YAML/JSON): how to log in, which endpoints to call, how to page through results, and how to map the response. No connector code is written."},
-    {"term": "Version & approval", "text": "Every change creates a new version. A version is frozen when submitted; an administrator who is not the requester reviews exactly what it can do and publishes that exact version. The AI can never approve or publish."},
+    {"term": "Version & approval", "text": "Every change creates a new version. A version is frozen when submitted; an administrator (or owner) reviews exactly what it can do and publishes that exact version; approving your own submission is allowed but flagged in the audit log. The AI can never approve or publish."},
     {"term": "Data source", "text": "An integration operation with an ingest block. It pulls records on a schedule (interval or cron) and maps them into the common format, with retries, rate-limit handling, de-duplication and bad-data quarantine handled by the platform."},
     {"term": "Common format", "text": "Three shapes every source lands in. Event/alert: event_id, timestamp, category, action, actor, target, outcome, severity, message. User: id, name, email, status, last_login. Device: id, hostname, ip, os, owner, last_seen. Every record also keeps source and fetched_at plus the original raw record."},
     {"term": "Incremental sync (high-water mark)", "text": "After each run the newest event timestamp is saved. The next run asks the API only for newer data. 'Re-read full history' clears it; de-duplication keeps events unique."},
