@@ -18,7 +18,8 @@ def _view(db: Session, org: Organization, p: Principal) -> dict:
     links = cfg.get("links") or {}
     out = {"enabled": bool(cfg.get("enabled")), "configured": bool(cfg.get("bot_ref") and cfg.get("app_ref")),
            "team": cfg.get("team", ""), "bot_name": cfg.get("bot_name", ""), "status": slack_bot.STATUS.get(org.id, {"state": "stopped"}),
-           "my_links": [s for s, u in links.items() if u == p.id], "manifest": slack_bot.MANIFEST}
+           "my_links": [s for s, u in links.items() if u == p.id], "manifest": slack_bot.MANIFEST,
+           "missing_scopes": cfg.get("missing_scopes") or {}, "last_event": slack_bot.LAST_EVENT.get(org.id)}
     if p.at_least("admin"):
         out["links"] = [{"slack_user": s, "user_id": u, "username": (db.get(User, u).username if db.get(User, u) else "?")} for s, u in links.items()]
     return out
@@ -59,6 +60,9 @@ def save_slack(body: SlackIn, p: Principal = Depends(require_human("admin")), db
     if body.enabled and not (cfg.get("bot_ref") and cfg.get("app_ref")):
         raise HTTPException(422, "Add both the bot token and the app-level token before turning Slack on.")
     cfg["enabled"] = body.enabled
+    if cfg.get("bot_ref"):  # re-checked on every save, so "reinstall the app, then Save" confirms the fix
+        bot, _ = slack_bot.tokens(db, org) if not body.bot_token else (body.bot_token.strip(), None)
+        cfg["missing_scopes"] = slack_bot.missing_scopes(bot)
     slack_bot.save_config(db, org, cfg)
     audit.record(db, p.org_id, p, "settings.slack", org.name, enabled=body.enabled, bot_rotated=bool(body.bot_token), app_rotated=bool(body.app_token))
     db.commit()

@@ -36,16 +36,39 @@ CODE_TTL = 600
 _CODES: dict[str, tuple[str, str, float]] = {}  # sha256(code) -> (org_id, user_id, expires)
 _LOCK = threading.Lock()
 STATUS: dict[str, dict] = {}  # org_id -> {"state", "detail", "since"}
+LAST_EVENT: dict[str, str] = {}  # org_id -> when Slack last delivered a message or button click
 _BRIDGES: dict[str, "Bridge"] = {}
 MANIFEST = {
     "display_information": {"name": "H.E.D.E.S", "description": "Talk to the H.E.D.E.S AI assistant"},
     "features": {"bot_user": {"display_name": "H.E.D.E.S", "always_online": True},
                  "app_home": {"messages_tab_enabled": True, "messages_tab_read_only_enabled": False}},
-    "oauth_config": {"scopes": {"bot": ["app_mentions:read", "chat:write", "im:history", "im:read", "im:write"]}},
+    # users:read lets bots.info confirm the bot token and the app-level token come from the same app
+    "oauth_config": {"scopes": {"bot": ["app_mentions:read", "chat:write", "im:history", "im:read", "im:write", "users:read"]}},
     "settings": {"event_subscriptions": {"bot_events": ["app_mention", "message.im"]}, "interactivity": {"is_enabled": True},
                  "socket_mode_enabled": True, "org_deploy_enabled": False, "token_rotation_enabled": False},
 }
 ACTION_LABELS = {"create_workflow": "Create a workflow", "run_workflow": "Run a workflow", "investigate_failure": "Investigate a failure"}
+NEEDED_SCOPES = {"chat:write": "posting replies", "im:history": "receiving direct messages", "im:read": "reading direct messages",
+                 "im:write": "replying in direct messages", "app_mentions:read": "@mentions in channels"}
+
+
+def missing_scopes(bot_token: str) -> dict[str, str]:
+    """Scopes the bot token lacks. Slack lists a token's scopes in the x-oauth-scopes header of any Web API call."""
+    try:
+        r = httpx.post(API + "auth.test", headers={"Authorization": f"Bearer {bot_token}"}, timeout=15)
+    except httpx.HTTPError:
+        return {}
+    granted = {s.strip() for s in (r.headers.get("x-oauth-scopes") or "").split(",") if s.strip()}
+    return {s: why for s, why in NEEDED_SCOPES.items() if s not in granted} if granted else {}
+
+
+def bot_app_id(bot_token: str) -> str:
+    """The Slack app a bot token belongs to, or "" when Slack won't say (bots.info needs users:read)."""
+    try:
+        bot_id = call(bot_token, "auth.test").get("bot_id")
+        return (call(bot_token, "bots.info", bot=bot_id).get("bot") or {}).get("app_id", "") if bot_id else ""
+    except Exception:
+        return ""
 
 
 # ----------------------------------------------------------------------------------------------- configuration
@@ -177,9 +200,10 @@ def handle_message(db: Session, org: Organization, token: str, event: dict) -> N
     channel, user = event.get("channel", ""), event.get("user", "")
     thread_ts = event.get("thread_ts") or event.get("ts")
     text = re.sub(r"<@[A-Z0-9]+>", "", event.get("text") or "").strip()
+    command = text.strip("`*_~ ").strip()  # "link 123456" may arrive formatted as code (`link 123456`)
     if not text:
         return
-    link = re.fullmatch(r"link\s+(\d{6})", text, re.I)
+    link = re.fullmatch(r"link\s+`?(\d{6})`?", command, re.I)
     if link:
         u = redeem_link_code(db, org, link.group(1), user)
         db.commit()
@@ -261,7 +285,10 @@ class Bridge(threading.Thread):
         self.stop = threading.Event()
 
     def _status(self, state: str, detail: str = "") -> None:
-        STATUS[self.org_id] = {"state": state, "detail": detail, "since": utcnow().isoformat()}
+        # Only the organisation's current connection reports: a replaced one shutting down must not overwrite
+        # the new connection's "connected" with "stopped".
+        if _BRIDGES.get(self.org_id) is self:
+            STATUS[self.org_id] = {"state": state, "detail": detail, "since": utcnow().isoformat()}
 
     def run(self) -> None:
         from websockets.sync.client import connect
@@ -269,11 +296,15 @@ class Bridge(threading.Thread):
         while not self.stop.is_set():
             try:
                 with session_scope() as db:
-                    _, app_token = tokens(db, db.get(Organization, self.org_id))
+                    bot_token, app_token = tokens(db, db.get(Organization, self.org_id))
                 self._status("connecting")
                 url = call(app_token, "apps.connections.open")["url"]
                 with connect(url, open_timeout=15, close_timeout=2) as ws:
-                    self._status("connected")
+                    missing = missing_scopes(bot_token)
+                    self._status("connected", ("Connected, but the bot token is missing scopes, so Slack will not deliver messages: "
+                                               + ", ".join(f"{s} ({why})" for s, why in missing.items())
+                                               + ". Add them under OAuth & Permissions > Bot Token Scopes, reinstall the app, then press Save here.")
+                                 if missing else "")
                     delay = 2
                     while not self.stop.is_set():
                         try:
@@ -281,11 +312,21 @@ class Bridge(threading.Thread):
                         except TimeoutError:
                             continue
                         env = json.loads(raw)
+                        if env.get("type") == "hello" and _BRIDGES.get(self.org_id) is self:
+                            # Slack says which app this connection belongs to: the events received are that app's only
+                            app_id = (env.get("connection_info") or {}).get("app_id", "")
+                            bot_app = bot_app_id(bot_token)
+                            if app_id and bot_app and bot_app != app_id:
+                                self._status("error", f"The two tokens come from different Slack apps: the bot token from {bot_app}, the "
+                                             f"app-level token from {app_id}. Messages to the bot never reach this connection. Take both "
+                                             "tokens from the same app (Basic Information > App ID), then press Save here.")
+                            STATUS[self.org_id] = {**STATUS.get(self.org_id, {}), "app_id": app_id}
                         if env.get("envelope_id"):
                             ws.send(json.dumps({"envelope_id": env["envelope_id"]}))  # acknowledge within Slack's 3 seconds
                         if env.get("type") == "disconnect":
                             break
                         if env.get("type") in ("events_api", "interactive"):
+                            LAST_EVENT[self.org_id] = utcnow().isoformat()
                             threading.Thread(target=handle_envelope, args=(self.org_id, env), daemon=True).start()
             except SlackError as e:
                 self._status("error", f"Slack refused the app-level token: {e}")
@@ -300,8 +341,17 @@ def _fingerprint(cfg: dict) -> str:
     return f"{cfg.get('bot_ref')}|{cfg.get('app_ref')}"
 
 
+_SYNC = threading.Lock()
+
+
 def sync_bridges() -> None:
-    """Start, restart or stop each organisation's connection to match its Slack settings."""
+    """Start, restart or stop each organisation's connection to match its Slack settings. Serialised: Save and the
+    supervisor may call it at the same moment, which must not start two connections."""
+    with _SYNC:
+        _sync_bridges()
+
+
+def _sync_bridges() -> None:
     with session_scope() as db:
         wanted = {o.id: _fingerprint(config_of(o)) for o in db.scalars(select(Organization)).all()
                   if config_of(o).get("enabled") and config_of(o).get("bot_ref") and config_of(o).get("app_ref")}
@@ -314,6 +364,7 @@ def sync_bridges() -> None:
     for org_id, fp in wanted.items():
         if org_id not in _BRIDGES:
             _BRIDGES[org_id] = Bridge(org_id, fp)
+            STATUS[org_id] = {"state": "connecting", "detail": "", "since": utcnow().isoformat()}  # before the thread reports
             _BRIDGES[org_id].start()
 
 

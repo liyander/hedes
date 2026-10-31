@@ -352,7 +352,10 @@ function slackCard(s) {
         ask about integrations, data sources and failures, discuss self-healing cases, create and run workflows, run tools. Every change shows
         <b>Approve</b> / <b>Reject</b> buttons and runs only after the person who asked approves it. Secrets are never accepted in Slack.
         It connects out to Slack (Socket Mode), so no public URL is needed.</p>
-      ${st.detail ? `<div class="callout ${st.state === 'error' ? 'bad' : 'info'} small" style="margin-bottom:10px">${esc(st.detail)}</div>` : ''}
+      ${st.detail ? `<div class="callout ${st.state === 'error' || st.detail.includes('missing scopes') ? 'bad' : 'info'} small" style="margin-bottom:10px">${esc(st.detail)}</div>` : ''}
+      ${Object.keys(s.missing_scopes || {}).length && !(st.detail || '').includes('missing scopes') ? `<div class="callout bad small" style="margin-bottom:10px"><b>The bot token is missing scopes</b>, so Slack will not deliver messages:
+        ${Object.entries(s.missing_scopes).map(([k, v]) => `<code>${esc(k)}</code> (${esc(v)})`).join(', ')}. Add them under <b>OAuth &amp; Permissions → Bot Token Scopes</b>, click <b>Reinstall to Workspace</b>, then press Save here.</div>` : ''}
+      ${s.enabled ? `<p class="small muted" style="margin:0 0 10px">Last message from Slack: <b>${s.last_event ? agoCell(s.last_event) : 'none yet'}</b>${s.last_event ? '' : ' - if you sent the app a DM and this still says none, Slack is not delivering events: in that app turn on Event Subscriptions and subscribe to the bot events message.im and app_mention, then reinstall the app.'}${st.app_id ? ` Connected as Slack app <code>${esc(st.app_id)}</code> - it must match <b>Basic Information → App ID</b> of the app you DM and took the bot token from.` : ''}</p>` : ''}
       <details ${s.configured ? '' : 'open'} style="margin-bottom:12px"><summary style="cursor:pointer"><b>Set up the Slack app (5 minutes)</b></summary>
         <ol class="small" style="padding-left:18px;margin:8px 0">
           <li>Go to <span class="mono">api.slack.com/apps</span> → <b>Create New App</b> → <b>From a manifest</b>, pick your workspace and paste the manifest below.</li>

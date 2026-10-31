@@ -40,6 +40,7 @@ def slack(monkeypatch):
     fake = FakeSlack()
     monkeypatch.setattr(slack_bot, "call", fake)
     monkeypatch.setattr(slack_bot, "sync_bridges", lambda: None)  # no real WebSocket to Slack in tests
+    monkeypatch.setattr(slack_bot, "missing_scopes", lambda token: {} if token == "xoxb-good" else {"im:history": "receiving direct messages"})
     return fake
 
 
@@ -70,7 +71,7 @@ def test_slack_channel_end_to_end(server, ai, slack):
     code = admin.post("/api/v1/settings/slack/link-code").json()["code"]
     dm(org, "UADMIN", "link 000000" if code != "000000" else "link 111111")
     assert "invalid or expired" in slack.posts()[-1]["text"]
-    dm(org, "UADMIN", f"link {code}")
+    dm(org, "UADMIN", f"`link {code}`")                                                # Slack sends it formatted as code
     assert "Linked to H.E.D.E.S account *admin*" in slack.posts()[-1]["text"]
     assert any(l["username"] == "admin" for l in admin.get("/api/v1/settings/slack").json()["links"])
 
@@ -165,3 +166,38 @@ def test_socket_mode_acknowledges_envelopes_and_reconnects(monkeypatch):
     finally:
         bridge.stop.set()
         server.shutdown()
+
+
+
+def test_missing_scopes_are_reported(server, slack, monkeypatch):
+    monkeypatch.setattr(slack_bot, "LAST_EVENT", {})
+    admin = login(server, "admin")
+    v = admin.put("/api/v1/settings/slack", json={"enabled": True, "bot_token": "xoxb-old-scopes", "app_token": "xapp-1"}).json()
+    assert v["missing_scopes"] == {"im:history": "receiving direct messages"} and v["last_event"] is None
+    v = admin.put("/api/v1/settings/slack", json={"enabled": False, "bot_token": "xoxb-good"}).json()
+    assert v["missing_scopes"] == {}
+
+
+def test_scopes_are_read_from_slacks_response_header(monkeypatch):
+    import httpx
+    monkeypatch.setattr(slack_bot.httpx, "post", lambda *a, **k: httpx.Response(200, json={"ok": True},
+                        headers={"x-oauth-scopes": "chat:write,chat:write.public"}))
+    assert set(slack_bot.NEEDED_SCOPES) - set(slack_bot.missing_scopes("xoxb-x")) == {"chat:write"}
+
+
+def test_a_replaced_connection_cannot_overwrite_the_new_ones_status(monkeypatch):
+    monkeypatch.setattr(slack_bot, "_BRIDGES", {})
+    monkeypatch.setattr(slack_bot, "STATUS", {})
+    old, new = slack_bot.Bridge("org-x", "fp-old"), slack_bot.Bridge("org-x", "fp-new")
+    slack_bot._BRIDGES["org-x"] = new
+    new._status("connected")
+    old._status("stopped")                      # the replaced connection shutting down a moment later
+    assert slack_bot.STATUS["org-x"]["state"] == "connected"
+
+
+def test_the_bot_tokens_app_is_looked_up(monkeypatch):
+    replies = {"auth.test": {"ok": True, "bot_id": "B1"}, "bots.info": {"ok": True, "bot": {"id": "B1", "app_id": "A_BOT"}}}
+    monkeypatch.setattr(slack_bot, "call", lambda token, method, **b: replies[method])
+    assert slack_bot.bot_app_id("xoxb-x") == "A_BOT"
+    monkeypatch.setattr(slack_bot, "call", lambda token, method, **b: (_ for _ in ()).throw(slack_bot.SlackError("missing_scope")))
+    assert slack_bot.bot_app_id("xoxb-x") == ""                        # without users:read the check is skipped, not fatal
