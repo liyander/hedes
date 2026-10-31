@@ -4,3 +4,4 @@ __pycache__/
 backend/data/*
 !backend/data/.gitkeep
 .pytest_cache/
+backend/.venv/
