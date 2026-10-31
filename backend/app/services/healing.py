@@ -44,6 +44,88 @@ def enabled(db: Session, org_id: str) -> bool:
     return bool(integrations.org_policy(db, org_id).get("self_healing"))
 
 
+def auto_enabled(db: Session, org_id: str) -> bool:
+    """Automatic mode: non-critical fixes are published without waiting for an administrator."""
+    p = integrations.org_policy(db, org_id)
+    return bool(p.get("self_healing") and p.get("self_healing_auto"))
+
+
+class _AutoReviewer:
+    """The actor recorded when self-healing publishes a non-critical fix on its own."""
+    id = None
+    username = "self-healing (automatic)"
+
+
+AUTO = _AutoReviewer()
+
+
+def critical_reasons(old: dict, new: dict, version: IntegrationVersion) -> list[str]:
+    """Why a prepared fix must wait for an administrator. Empty = safe to apply automatically."""
+    from urllib.parse import urlsplit
+    reasons: list[str] = []
+    report = version.security_report or {}
+    if report.get("blocking") or report.get("level") in ("high", "critical"):
+        reasons.append(f"the security review rates it {report.get('level', 'blocking')}")
+    o, n = old["integration"], new["integration"]
+    if urlsplit(o.get("base_url", "")).netloc != urlsplit(n.get("base_url", "")).netloc:
+        reasons.append("it changes the destination host")
+    if o.get("authentication") != n.get("authentication"):
+        reasons.append("it changes how the integration authenticates")
+    if (o.get("default_headers") or {}) != (n.get("default_headers") or {}):
+        reasons.append("it changes the headers sent with every request")
+    old_ops = {op["id"]: op for op in o.get("operations") or []}
+    new_ops = {op["id"]: op for op in n.get("operations") or []}
+    if set(old_ops) != set(new_ops):
+        reasons.append("it adds or removes operations")
+    for op_id in set(old_ops) & set(new_ops):
+        a, b = old_ops[op_id], new_ops[op_id]
+        if a == b:
+            continue
+        if a.get("method") != b.get("method"):
+            reasons.append(f"it changes the HTTP method of {op_id}")
+        if b.get("method") == "DELETE" or b.get("safety") == "destructive" or a.get("safety") == "destructive":
+            reasons.append(f"it changes {op_id}, which can delete data")
+        if (a.get("input_schema") or {}) != (b.get("input_schema") or {}):
+            reasons.append(f"it changes the inputs of {op_id}, which callers depend on")
+    return reasons
+
+
+def _auto_apply(db: Session, case: HealingCase, integ: Integration, live: IntegrationVersion) -> None:
+    """Automatic mode: publish a prepared, tested, non-critical fix, verify it, and roll back if the service is worse."""
+    fix = db.get(IntegrationVersion, case.fix_version_id) if case.fix_version_id else None
+    if not fix or not case.approval_request_id:
+        return
+    reasons = critical_reasons(live.config, fix.config, fix)
+    if reasons:
+        log_event(case, "auto_skip", "Automatic mode is on, but this fix is critical, so it waits for an administrator: " + "; ".join(reasons))
+        case.required = [f"Approve or reject version {fix.version} in Approvals (critical: {'; '.join(reasons)})."]
+        return
+    from fastapi import HTTPException
+    try:
+        integrations.approve(db, case.organization_id, case.approval_request_id, AUTO,
+                             comment="Applied automatically by self-healing (non-critical change; it passed validation, the security policy and the safe tests)")
+    except HTTPException as e:
+        log_event(case, "auto_skip", f"Could not publish the fix automatically: {e.detail}", False)
+        return
+    log_event(case, "auto_applied", f"Published version {fix.version} automatically (non-critical: same host, authentication, methods and inputs)", True)
+    ok, detail = _probe(db, integ, fix)
+    if ok is False:
+        try:
+            integrations.rollback(db, case.organization_id, integ, live.id, AUTO)
+            log_event(case, "rolled_back", f"The check after publishing failed ({detail[:300]}), so version {live.version} was restored", False)
+        except HTTPException as e:
+            log_event(case, "rolled_back", f"The check after publishing failed ({detail[:300]}) and the previous version could not be restored: {e.detail}", False)
+        case.status = "needs_admin"
+        case.required = [f"The automatic fix (version {fix.version}) did not work and was rolled back. Investigate the integration by hand."]
+        return
+    log_event(case, "verified", f"Checked the service after publishing: {detail}" if ok else "There is no safe read-only call to verify with; the safe tests passed", ok)
+    case.status, case.resolved_at, case.required, case.still_failing = "resolved", utcnow(), [], ""
+    case.root_cause = case.root_cause + f" Fixed automatically with version {fix.version}."
+    audit.alert(db, case.organization_id, "self_healed", f"{case.target}\nRoot cause: {case.root_cause}\nWhat was done:\n"
+                + "\n".join(f"- {a['action']}" for a in case.attempts or []) + f"\n- Published version {fix.version} automatically and re-checked the service",
+                "info", case.integration_id, f"#/healing/{case.id}")
+
+
 # ----------------------------------------------------------------------------------------------- triggers
 
 def _open_case(db: Session, org_id: str, error_class: str, integration_id: str | None = None, workflow_id: str | None = None) -> HealingCase | None:
@@ -352,6 +434,8 @@ def investigate(db: Session, case: HealingCase) -> None:
     else:
         case.required = [fix or "Review the failed execution in Monitoring."]
 
+    if case.status == "awaiting_approval" and auto_enabled(db, case.organization_id):
+        _auto_apply(db, case, integ, live)
     if case.status == "investigating":
         case.status = "needs_admin"
     if case.status != "resolved":

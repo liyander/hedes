@@ -287,7 +287,7 @@ def approve(db: Session, org_id: str, request_id: str, reviewer, comment: str = 
     from . import healing
     healing.on_fix_decision(db, req.id, "approved", getattr(getattr(reviewer, "user", reviewer), "username", "An administrator"))
     audit.record(db, org_id, reviewer, "approval.approve", f"{integ.slug}@{v.version}", request_id=req.id, config_hash=req.config_hash,
-                 self_approved=req.requester_id == reviewer.id)
+                 self_approved=bool(reviewer.id) and req.requester_id == reviewer.id, automatic=reviewer.id is None)
     audit.record(db, org_id, reviewer, "integration.publish", f"{integ.slug}@{v.version}", config_hash=req.config_hash)
     return req
 

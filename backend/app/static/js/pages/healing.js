@@ -9,6 +9,8 @@ const STAGE = {
   evidence: ['list', 'Evidence collected'], attempt: ['wrench', 'Fix attempted'], diagnosis: ['doc', 'Root cause'],
   analysis: ['spark', 'AI analysis'], outcome: ['check', 'Outcome'], notified: ['bell', 'Administrators notified'],
   fix_decision: ['shield', 'Fix decision'], error: ['alert', 'Investigation error'],
+  auto_applied: ['check', 'Fix applied automatically'], auto_skip: ['shield', 'Kept for approval'], verified: ['eye', 'Verified after the fix'],
+  rolled_back: ['refresh', 'Rolled back'],
 };
 const dur = (s) => (s == null ? '—' : s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
 
@@ -27,7 +29,7 @@ export async function render(ctx) {
       <div class="card stat good"><div class="ico"></div><div><b>${s.resolved}${s.fixed_rate != null ? `<small style="font-size:13px;font-weight:500"> · ${s.fixed_rate}%</small>` : ''}</b><span>Fixed</span></div></div>
       <div class="card stat ${s.awaiting_approval ? 'attn' : ''}"><div class="ico"></div><div><b>${s.awaiting_approval}</b><span>Fix awaiting approval</span></div></div>
       <div class="card stat ${s.needs_admin ? 'alert' : ''}"><div class="ico"></div><div><b>${s.needs_admin}</b><span>Need an admin</span></div></div>`;
-    $('#hl-state', el).innerHTML = h.enabled ? `${badge('ok', 'automatic self-healing on')}` : `${badge('disabled', 'automatic self-healing off')} ${isAdmin() ? '<a class="link small" href="#/settings">Turn on in Settings</a>' : ''}`;
+    $('#hl-state', el).innerHTML = h.enabled ? (h.auto ? badge('ok', 'fixing automatically') : badge('ok', 'preparing fixes for approval')) : `${badge('disabled', 'automatic self-healing off')} ${isAdmin() ? '<a class="link small" href="#/settings">Turn on in Settings</a>' : ''}`;
     $('#hl-body', el).innerHTML = h.cases.length ? `<div class="table-scroll"><table><thead><tr><th>Session</th><th>Outcome</th><th>Root cause</th><th>Fixes tried</th><th>Runs</th><th>Seen</th><th>Duration</th><th>Started</th></tr></thead><tbody>
       ${h.cases.map((c) => `<tr class="clickable" data-go="#/healing/${c.id}"><td><b class="mono small">${esc(c.target)}</b><div class="muted small">${esc(c.error_class.replace(/_/g, ' '))}</div></td>
         <td>${badge(CASE_STATUS[c.status] || '', CASE_LABEL[c.status] || c.status)}</td>

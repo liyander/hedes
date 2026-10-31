@@ -57,7 +57,7 @@ def list_cases(p: Principal = Depends(current_principal), db: Session = Depends(
     counts = dict(db.execute(select(HealingCase.status, func.count()).where(HealingCase.organization_id == p.org_id)
                              .group_by(HealingCase.status)).all())
     total = sum(counts.values())
-    return {"enabled": healing.enabled(db, p.org_id), "cases": [case_view(c) for c in rows],
+    return {"enabled": healing.enabled(db, p.org_id), "auto": healing.auto_enabled(db, p.org_id), "cases": [case_view(c) for c in rows],
             "summary": {"total": total, **{k: counts.get(k, 0) for k in ("investigating", "resolved", "awaiting_approval", "needs_admin")},
                         "fixed_rate": round(100 * counts.get("resolved", 0) / total) if total else None}}
 

@@ -178,6 +178,7 @@ export function formData(root) {
   const out = {};
   $$('[name]', root).forEach((el) => {
     if (el.type === 'checkbox') out[el.name] = el.checked;
+    else if (el.type === 'radio') { if (el.checked) out[el.name] = el.value; }
     else if (el.type === 'number') out[el.name] = el.value === '' ? null : Number(el.value);
     else out[el.name] = el.value;
   });

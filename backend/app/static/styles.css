@@ -487,3 +487,8 @@ h4.small.muted { margin: 14px 0 4px; letter-spacing: .04em; font-weight: 600; }
 .tl-dot { width: 21px; height: 21px; border-radius: 50%; flex: none; display: grid; place-items: center; background: var(--hover); color: var(--muted); border: 1px solid var(--line-strong); }
 .tl-item.ok .tl-dot { background: var(--ok-soft); color: var(--ok); border-color: var(--ok-line); }
 .tl-item.bad .tl-dot { background: var(--bad-soft); color: var(--bad); border-color: var(--bad-line); }
+
+.heal-mode .radio-card { display: flex; gap: 10px; align-items: flex-start; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; font-weight: 400; cursor: pointer; }
+.heal-mode .radio-card:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.heal-mode .radio-card input { margin-top: 3px; accent-color: var(--accent); }
+.heal-mode .radio-card > span { display: flex; flex-direction: column; gap: 1px; }

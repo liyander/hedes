@@ -18,8 +18,17 @@ export async function render({ el }) {
         <div class="grid-2"><div class="field"><label>Alert after N failed runs in a row</label><input type="number" name="source_failure_alert_after" value="${p.source_failure_alert_after ?? 3}" min="1" max="20" ${admin ? '' : 'disabled'}><div class="hint">A data source that fails this many consecutive runs raises an alert.</div></div>
           <div class="field"><label>Credential rotation period (days)</label><input type="number" name="credential_rotation_days" value="${p.credential_rotation_days ?? 90}" min="7" max="730" ${admin ? '' : 'disabled'}><div class="hint">Older secrets raise a "rotate me" alert.</div></div></div>
         <label class="check"><input type="checkbox" name="require_tests" ${p.require_tests !== false ? 'checked' : ''} ${isOwner() ? '' : 'disabled'}> Require passing safe tests before review <span class="muted small">(platform owner)</span></label>
-        <label class="check"><input type="checkbox" name="self_healing" ${p.self_healing ? 'checked' : ''} ${admin ? '' : 'disabled'}> Self-healing</label>
-        <div class="hint" style="margin:-2px 0 10px 26px">The AI traces every failing integration, data source and workflow, finds the root cause and tries to fix it (fixes that change a configuration still need approval). What it cannot fix is emailed to the administrators with the root cause, what it tried and what it needs. Configure email under Alert delivery.</div>
+        <div class="field heal-mode"><label>Self-healing</label>
+          ${[['off', 'Off', 'Failures are only reported. You can still investigate one by hand from Monitoring.'],
+             ['approve', 'Investigate and prepare fixes', 'The AI traces each failure, finds the root cause and tries safe checks. Any configuration fix it prepares waits for an administrator.'],
+             ['auto', 'Fix automatically', 'Non-critical fixes are tested, published, re-checked and rolled back if they make things worse - no approval needed. Critical fixes still wait for an administrator.']]
+            .map(([v, l, d]) => `<label class="radio-card"><input type="radio" name="heal_mode" value="${v}" ${(p.self_healing ? (p.self_healing_auto ? 'auto' : 'approve') : 'off') === v ? 'checked' : ''} ${admin ? '' : 'disabled'}>
+              <span><b>${l}</b><span class="small muted">${d}</span></span></label>`).join('')}
+          <details class="small" style="margin-top:6px"><summary class="muted" style="cursor:pointer">What counts as critical?</summary>
+            <ul class="small" style="margin:6px 0 0;padding-left:18px;line-height:1.7"><li>the security review rates the new version high or critical</li><li>the destination host, authentication or default headers change</li>
+              <li>operations are added or removed, or an HTTP method changes</li><li>an operation that can delete data is changed</li><li>an operation's inputs change (callers depend on them)</li></ul>
+            <p class="muted" style="margin:6px 0 0">Secrets are never changed by the AI. Everything self-healing does is in its session log and the audit log, and any version can be rolled back.</p></details>
+          <div class="hint">Configure email under Alert delivery to be told about failures (and, in automatic mode, about fixes).</div></div>
         ${admin ? '<div class="row end"><button class="btn primary" id="save-policy">Save policy</button></div>' : ''}</div></div>
       <div class="card"><div class="card-head"><h2>API &amp; MCP access</h2><span class="spacer"></span><button class="btn sm" id="new-token">${icon('plus', 13)} New token</button></div><div class="card-body">
         <p class="small muted" style="margin-top:0">Personal tokens act with your role. They can run tools and read data, but can never approve, publish or change policy.</p>
@@ -47,7 +56,8 @@ export async function render({ el }) {
 
   $('#save-policy', el)?.addEventListener('click', async () => {
     const f = formData($('#policy', el));
-    const body = { allowed_domains: f.allowed_domains.split(',').map((s) => s.trim()).filter(Boolean), ai_monthly_budget_usd: f.ai_monthly_budget_usd, repair_after_failures: f.repair_after_failures, source_failure_alert_after: f.source_failure_alert_after, credential_rotation_days: f.credential_rotation_days, self_healing: f.self_healing };
+    const body = { allowed_domains: f.allowed_domains.split(',').map((s) => s.trim()).filter(Boolean), ai_monthly_budget_usd: f.ai_monthly_budget_usd, repair_after_failures: f.repair_after_failures, source_failure_alert_after: f.source_failure_alert_after, credential_rotation_days: f.credential_rotation_days,
+      self_healing: f.heal_mode !== 'off', self_healing_auto: f.heal_mode === 'auto' };
     if (isOwner()) body.require_tests = f.require_tests;
     try { await api('/organizations/current/policy', { method: 'PATCH', body }); toast('Policy saved', 'ok'); } catch (err) { toast(err.message, 'bad'); }
   });
