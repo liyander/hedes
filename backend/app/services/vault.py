@@ -6,7 +6,6 @@ returned by the API, logged, or included in AI prompts.
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 from functools import lru_cache
@@ -18,7 +17,6 @@ from ..core.config import get_settings
 from ..models import Secret
 
 PREFIX = "vault:"
-log = logging.getLogger("integra.vault")
 
 
 @lru_cache
@@ -64,9 +62,6 @@ def read_secret(db: Session, ref: str | None, org_id: str | None) -> dict | None
     try:
         payload = json.loads(_fernet().decrypt(row.ciphertext.encode()))
     except InvalidToken:
-        # Almost always a different SECRET_ENCRYPTION_KEY than the one the secret was stored with (e.g. a generated key lost
-        # in a redeploy): say so, instead of every credential silently looking "not set up".
-        log.warning("Secret %s cannot be decrypted with the current SECRET_ENCRYPTION_KEY", row.id)
         return None
     allowed = _env_allowed(org_id)
     return {k: resolve_env(v, allowed) for k, v in payload.items()}

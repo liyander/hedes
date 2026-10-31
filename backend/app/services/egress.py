@@ -5,8 +5,6 @@ import ipaddress
 import socket
 from urllib.parse import urlsplit
 
-import httpx
-
 from ..core.config import get_settings
 
 BLOCKED_HOSTNAMES = {"localhost", "metadata", "metadata.google.internal", "metadata.azure.com", "instance-data"}
@@ -17,32 +15,8 @@ class EgressDenied(Exception):
     pass
 
 
-DEFAULT_PORTS = {"http": 80, "https": 443}
-
-
-def _parts(url: str) -> tuple[str, str, int | None, str, bytes] | None:
-    """(scheme, host, port, path, userinfo) as httpx sends the URL: dot segments resolved, scheme and host lower-cased."""
-    try:
-        u = httpx.URL(url)
-    except (httpx.InvalidURL, TypeError):
-        return None
-    return u.scheme, u.host, u.port or DEFAULT_PORTS.get(u.scheme), u.path, u.userinfo
-
-
-def allowlisted(url: str) -> bool:
-    """Inside an operator-approved private destination (normally the bundled mock APIs)? Compared part by part: the same
-    scheme, host and port, a path inside the prefix's path, no credentials - so "<prefix>/../api", "http://intra@10.0.0.9",
-    "http://intra.attacker.net" or ":80801" cannot pass and then skip the other checks."""
-    u = _parts(url)
-    if not u or u[4]:
-        return False
-    for prefix in get_settings().egress_allowlist:
-        p = _parts(prefix)
-        if not p or u[:3] != p[:3]:
-            continue
-        if p[3] in ("", "/") or u[3] == p[3].rstrip("/") or u[3].startswith(p[3].rstrip("/") + "/"):
-            return True
-    return False
+def _allowlisted(url: str) -> bool:
+    return any(url.startswith(prefix) for prefix in get_settings().egress_allowlist)
 
 
 def host_of(url: str) -> str:
@@ -66,7 +40,7 @@ def _check_ip(ip: ipaddress._BaseAddress, host: str) -> None:
 
 def static_check(url: str) -> None:
     """Checks that need no DNS: scheme, credentials-in-URL, literal private IPs, blocked names."""
-    if allowlisted(url):
+    if _allowlisted(url):
         return
     parts = urlsplit(url)
     if parts.scheme not in ("https", "http"):
@@ -90,15 +64,12 @@ def static_check(url: str) -> None:
 def check_url(url: str, allowed_domains: list[str] | None = None) -> None:
     """Full check before a live request: static rules, organisation domain policy, DNS resolution."""
     static_check(url)
-    if allowlisted(url):
+    if _allowlisted(url):
         return
     host = host_of(url)
     if not domain_allowed(host, allowed_domains or []):
         raise EgressDenied(f"{host} is not in the organisation's allowed destinations")
-    try:
-        port = urlsplit(url).port or 443
-    except ValueError:  # e.g. ":99999"
-        raise EgressDenied("The URL has an invalid port")
+    port = urlsplit(url).port or 443
     try:
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror:

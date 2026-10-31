@@ -10,5 +10,4 @@ WORKDIR /srv/backend
 RUN useradd --create-home integra && mkdir -p data && chown -R integra data
 USER integra
 EXPOSE 8000
-# Zoho Catalyst AppSail assigns the port in X_ZOHO_CATALYST_LISTEN_PORT; everywhere else it is 8000.
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${X_ZOHO_CATALYST_LISTEN_PORT:-8000}"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

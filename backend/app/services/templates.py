@@ -63,8 +63,6 @@ def render(value: Any, ctx: dict) -> Any:
             return lookup(ctx, full.group(1))
         if "${" not in value:
             return value
-        if "${" in REF.sub("", value):  # checked on the template, not the result: substituted data may itself contain "${"
-            raise TemplateError(f"Unsupported template expression in {value!r}")
         missing = False
 
         def sub(m: re.Match) -> str:
@@ -76,6 +74,8 @@ def render(value: Any, ctx: dict) -> Any:
             return v if isinstance(v, str) else _stringify(v)
 
         out = REF.sub(sub, value)
+        if "${" in out:
+            raise TemplateError(f"Unsupported template expression in {value!r}")
         return MISSING if missing else out
     if isinstance(value, dict):
         out = {}

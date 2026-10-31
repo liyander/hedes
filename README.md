@@ -357,6 +357,7 @@ NIM, Ollama or any OpenAI-compatible URL. Interactive API docs are at `/docs`.
 |---|---|
 | **Zoho Catalyst AppSail** (live) | Managed Python 3.12 runtime with dependencies bundled for Linux. Step by step in [`deploy/catalyst`](deploy/catalyst/README.md) |
 | **Neon PostgreSQL** | Set `DATABASE_URL=postgresql://…?sslmode=require`; the driver and pooler settings are handled automatically |
+| **Render** | `render.yaml` blueprint |
 | **Docker** | `Dockerfile` + `docker-compose.yml` |
 
 Keep `JWT_SECRET` and `SECRET_ENCRYPTION_KEY` the same everywhere a database is shared. The vault key is what decrypts

@@ -123,9 +123,9 @@ def generate(sid: str, body: GenerateIn, p: Principal = Depends(require_role("us
     if body.confirm != plan["fingerprint"]:
         raise HTTPException(409, "Review and confirm what will be created first (GET the plan, then send its fingerprint as confirm)")
     audit.record(db, p.org_id, p, "ai.generate.confirmed", s.title, plan=[i["slug"] for i in plan["items"]], workflow=plan["workflow"])
-    s.status = "running"  # before the run starts: a fast run's own final status must not be overwritten afterwards
-    db.commit()
     orchestrator.start(s.id, body.from_stage)
+    s.status = "running"
+    db.commit()
     return orchestrator.session_view(db, s)
 
 
@@ -163,15 +163,13 @@ def clean_secret(value: str | None) -> str | None:
     """Trim a pasted key and reject what cannot be a key, with a message that says what went wrong."""
     if value is None:
         return None
-    v = re.sub(r"[​-‍⁠﻿]", "", value).strip()  # invisible characters that copying from a web page adds
+    v = value.strip()
     if not v:
         return v
     if re.match(r"(?i)^https?://", v):
         raise ValueError("this looks like a URL, not a key. Put the URL in Base URL and paste only the key here")
     if re.search(r"[\s\x00-\x1f\x7f]", v):
         raise ValueError("the key contains spaces, tabs or line breaks. Paste only the key itself")
-    if not v.isascii():  # it goes into an HTTP header, which only carries ASCII
-        raise ValueError("the key contains a character that is not plain ASCII (a curly quote or symbol?). Paste only the key itself")
     return v
 
 

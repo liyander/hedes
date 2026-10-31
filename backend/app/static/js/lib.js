@@ -21,11 +21,7 @@ export async function api(path, { method = 'GET', body } = {}) {
   if (!res.ok) {
     let msg = data && data.detail;
     if (Array.isArray(msg)) msg = msg.map((d) => `${(d.loc || []).slice(1).join('.')}: ${d.msg}`).join('; ');
-    if (res.status === 401 && path !== '/auth/login' && path !== '/auth/me') {
-      // Forget the user first: otherwise the router sends #/login straight back to the dashboard, which gets 401 again, forever.
-      window.dispatchEvent(new CustomEvent('hedes:signed-out'));
-      location.hash = '#/login';
-    }
+    if (res.status === 401 && path !== '/auth/login' && path !== '/auth/me') { location.hash = '#/login'; }
     if (res.status === 404 && msg === 'Not Found') {
       // FastAPI's answer for a route that does not exist: the page is newer than the running server.
       msg = 'This action is not available on the running server - it is older than this page. Restart H.A.D.E.S (close its window and run run.bat again), then try again.';
@@ -213,7 +209,7 @@ export function schemaForm(schema, values = {}, prefix = 'in') {
   const req = new Set((schema && schema.required) || []);
   if (!Object.keys(props).length) return '<p class="muted small">This operation takes no inputs.</p>';
   return Object.entries(props).map(([k, p]) => {
-    const id = esc(`${prefix}-${k}`);  // property names come from the integration's input schema
+    const id = `${prefix}-${k}`;
     const v = values[k] ?? p.default ?? '';
     const label = `<label for="${id}">${esc(k)}${req.has(k) ? ' <span style="color:var(--bad)">*</span>' : ''} <span class="muted small">${esc(p.type || '')}</span></label>`;
     let ctl;

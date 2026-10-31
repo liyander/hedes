@@ -8,9 +8,9 @@ from sqlalchemy.orm import Session
 
 from ..core.db import get_db
 from ..core.security import Principal, current_principal, require_role
-from ..models import ApprovalRequest, Connection, Execution, IngestSource, Integration, IntegrationVersion
+from ..models import ApprovalRequest, Connection, Execution, IngestRun, IngestSource, Integration, IntegrationVersion
 from ..services import audit, catalog, integrations
-from .integrations import integration_summary, version_summary
+from .api_helpers import integration_summary_for, version_summary_for
 
 router = APIRouter(prefix="/api/v1", tags=["templates & guide"])
 
@@ -49,7 +49,7 @@ def create_template_integration(db: Session, p: Principal, tid: str, variables: 
         tests = {"result": tr.result, "passed": tr.report["passed"], "total": tr.report["total"]}
     audit.record(db, p.org_id, p, "template.create", tid, integration=integ.slug)
     db.commit()
-    return {"integration": integration_summary(db, integ), "version": version_summary(db, v), "validation": v.validation, "tests": tests}
+    return {"integration": integration_summary_for(db, integ), "version": version_summary_for(db, v), "validation": v.validation, "tests": tests}
 
 
 def _step(key: str, title: str, detail: str, done: bool, href: str = "", action: str = "", blocked: str = "") -> dict:

@@ -104,7 +104,7 @@ BAD_HEADER = ("The API key (or another header value) contains characters that ca
 
 
 def _transport_error(e: Exception) -> ProviderError:
-    if isinstance(e, UnicodeEncodeError) or "Illegal header value" in str(e) or "header" in type(e).__name__.lower():
+    if "Illegal header value" in str(e) or "header" in type(e).__name__.lower():
         return ProviderError(BAD_HEADER, retryable=False)
     return ProviderError(f"network error: {e}")
 
@@ -114,7 +114,7 @@ def _post(url: str, headers: dict, body: dict, timeout: float) -> dict:
         r = httpx.post(url, headers=headers, json=body, timeout=timeout)
     except httpx.TimeoutException:
         raise ProviderError("timeout")
-    except (httpx.TransportError, UnicodeEncodeError) as e:  # a non-ASCII character in a key cannot go into a header
+    except httpx.TransportError as e:
         raise _transport_error(e)
     if r.status_code >= 400:
         retryable = r.status_code in (408, 409, 429) or r.status_code >= 500
@@ -212,7 +212,7 @@ def _call_bedrock(base: str, key: str, model: str, system: str, messages: list, 
         r = httpx.post(base + path, headers=headers, content=body, timeout=timeout)
     except httpx.TimeoutException:
         raise ProviderError("timeout")
-    except (httpx.TransportError, UnicodeEncodeError) as e:  # a non-ASCII character in a key cannot go into a header
+    except httpx.TransportError as e:
         raise _transport_error(e)
     if r.status_code >= 400:
         detail = r.text[:300]
@@ -233,7 +233,7 @@ def _get_json(url: str, headers: dict, params: dict | None = None) -> dict:
         r = httpx.get(url, headers=headers, params=params, timeout=20)
     except httpx.TimeoutException:
         raise ProviderError("timeout while listing models")
-    except (httpx.TransportError, UnicodeEncodeError) as e:  # a non-ASCII character in a key cannot go into a header
+    except httpx.TransportError as e:
         raise _transport_error(e)
     if r.status_code >= 400:
         raise ProviderError(f"HTTP {r.status_code}: {r.text[:300]}", retryable=False)

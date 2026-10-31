@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..core.db import session_scope, utcnow
-from ..models import Membership, User, WebhookDelivery, Workflow, WorkflowRun, WorkflowStep, WorkflowVersion
+from ..models import Membership, WebhookDelivery, Workflow, WorkflowRun, WorkflowStep, WorkflowVersion
 from . import audit, automation, engine, runtime, templates, vault
 from .validation import topo_layers, validate_workflow_graph
 
@@ -28,9 +28,6 @@ def owner_actor(db: Session, wf: Workflow, automatic: bool = False) -> runtime.A
     m = db.scalars(select(Membership).where(Membership.user_id == wf.created_by, Membership.organization_id == wf.organization_id)).first()
     if not m:
         raise HTTPException(409, "The workflow owner is no longer a member of this organisation")
-    owner = db.get(User, m.user_id)
-    if not owner or owner.status != "active":
-        raise HTTPException(409, "The workflow owner's account is disabled, so the workflow cannot run as them")
     return runtime.Actor(m.user_id, m.role, wf.organization_id, automation.AUTOMATIC_ACTOR if automatic else "workflow", f"workflow:{wf.name[:40]}")
 
 
@@ -45,8 +42,6 @@ def save_version(db: Session, wf: Workflow, graph: dict, user_id: str) -> int:
         check = validate(db, wf, graph)
         if not check["valid"] or check["warnings"]:
             wf.status = "paused"
-        elif (graph.get("trigger") or {}).get("type") == "webhook" and not wf.webhook_secret_ref:
-            wf.status = "paused"  # it has no signing secret yet, so every delivery would be refused: activating shows one
     return n
 
 
@@ -103,10 +98,7 @@ def _run_node(org_id: str, actor: runtime.Actor, node: dict, inputs: dict, dry_r
         tool = runtime.resolve_tool(db, actor, node["tool"])
         _, version = runtime.authorize(db, actor, tool)
         if dry_run:
-            try:
-                pv = engine.preview(version.config, tool.operation_id, inputs)
-            except engine.EngineError as e:  # e.g. a path parameter that cannot be rendered
-                pv = {"ok": False, "errors": [str(e)]}
+            pv = engine.preview(version.config, tool.operation_id, inputs)
             # Later steps reference this step's outputs; give them visible placeholders instead of real values.
             placeholders = {f: f"<{node['id']}.{f}>" for f in tool.output_fields}
             return {"status": "planned" if pv["ok"] else "failed", "output": placeholders, "preview": pv,
@@ -134,50 +126,42 @@ def execute(db: Session, wf: Workflow, trigger: str, payload: dict, dry_run: boo
     nodes = {n["id"]: n for n in graph["nodes"]}
     ctx: dict = {"trigger": payload or {}, "steps": {}}
     status: dict[str, str] = {}
-    stopped = crashed = ""
-    try:
-        for layer in topo_layers(graph):
-            todo = []
-            for nid in layer:
-                node = nodes[nid]
-                deps = node.get("depends_on") or []
-                if stopped:
-                    status[nid] = "cancelled"
-                elif any(status.get(d) not in ("succeeded", "planned") for d in deps):
-                    status[nid] = "skipped"
-                elif not all(_cond(c, ctx) for c in node.get("when") or []):
-                    status[nid] = "skipped"
-                else:
-                    todo.append(nid)
-                    continue
-                db.add(WorkflowStep(run_id=run.id, node_id=nid, status=status[nid], finished_at=utcnow(),
-                                    error="Condition not met or dependency did not complete" if status[nid] == "skipped" else "Run stopped"))
-            rendered = {nid: templates.render(nodes[nid].get("inputs") or {}, ctx) for nid in todo}
-            with ThreadPoolExecutor(max_workers=max(1, min(4, len(todo)))) as pool:
-                futures = {nid: pool.submit(_run_node, wf.organization_id, actor, nodes[nid], rendered[nid], dry_run) for nid in todo}
-                for nid, fut in futures.items():
-                    started = utcnow()
-                    try:
-                        res = fut.result()
-                    except HTTPException as e:
-                        res = {"status": "failed", "output": {}, "error": str(e.detail)}
-                    except Exception as e:  # noqa: BLE001 - a step's own failure is recorded on the step
-                        log.exception("workflow step %s failed", nid)
-                        res = {"status": "failed", "output": {}, "error": f"{type(e).__name__}: {e}"}
-                    status[nid] = res["status"]
-                    ctx["steps"][nid] = {"output": res.get("output") or {}, "status": res["status"]}
-                    db.add(WorkflowStep(run_id=run.id, node_id=nid, status=res["status"], execution_id=res.get("execution_id"),
-                                        output={"inputs": rendered[nid], "result": res.get("preview") or res.get("output")}, error=res.get("error", "")[:2000],
-                                        started_at=started, finished_at=utcnow()))
-                    if res["status"] == "failed" and nodes[nid].get("on_failure", "stop") == "stop":
-                        stopped = nid
-            db.commit()
-    except Exception as e:  # noqa: BLE001 - bad data (a condition, a template) must not leave the run "running" forever
-        log.exception("workflow run %s failed", run.id)
-        db.rollback()
-        crashed = f"The run stopped: {type(e).__name__}: {e}"[:2000]
-    run.status = "failed" if crashed or stopped or any(s == "failed" for s in status.values()) else "succeeded"
-    run.error = crashed or (f"Step {stopped} failed" if stopped else "")
+    stopped = ""
+    for layer in topo_layers(graph):
+        todo = []
+        for nid in layer:
+            node = nodes[nid]
+            deps = node.get("depends_on") or []
+            if stopped:
+                status[nid] = "cancelled"
+            elif any(status.get(d) not in ("succeeded", "planned") for d in deps):
+                status[nid] = "skipped"
+            elif not all(_cond(c, ctx) for c in node.get("when") or []):
+                status[nid] = "skipped"
+            else:
+                todo.append(nid)
+                continue
+            db.add(WorkflowStep(run_id=run.id, node_id=nid, status=status[nid], finished_at=utcnow(),
+                                error="Condition not met or dependency did not complete" if status[nid] == "skipped" else "Run stopped"))
+        rendered = {nid: templates.render(nodes[nid].get("inputs") or {}, ctx) for nid in todo}
+        with ThreadPoolExecutor(max_workers=max(1, min(4, len(todo)))) as pool:
+            futures = {nid: pool.submit(_run_node, wf.organization_id, actor, nodes[nid], rendered[nid], dry_run) for nid in todo}
+            for nid, fut in futures.items():
+                started = utcnow()
+                try:
+                    res = fut.result()
+                except HTTPException as e:
+                    res = {"status": "failed", "output": {}, "error": str(e.detail)}
+                status[nid] = res["status"]
+                ctx["steps"][nid] = {"output": res.get("output") or {}, "status": res["status"]}
+                db.add(WorkflowStep(run_id=run.id, node_id=nid, status=res["status"], execution_id=res.get("execution_id"),
+                                    output={"inputs": rendered[nid], "result": res.get("preview") or res.get("output")}, error=res.get("error", "")[:2000],
+                                    started_at=started, finished_at=utcnow()))
+                if res["status"] == "failed" and nodes[nid].get("on_failure", "stop") == "stop":
+                    stopped = nid
+        db.commit()
+    run.status = "failed" if stopped or any(s == "failed" for s in status.values()) else "succeeded"
+    run.error = f"Step {stopped} failed" if stopped else ""
     run.finished_at = utcnow()
     db.commit()
     audit.record(db, wf.organization_id, actor, "workflow.run", wf.name, run_id=run.id, status=run.status, trigger=trigger, dry_run=dry_run)
@@ -220,19 +204,16 @@ def verify_webhook(db: Session, wf: Workflow, body: bytes, timestamp: str | None
                    delivery_id: str | None) -> str:
     if wf.status != "active":
         raise HTTPException(409, "Workflow is not active")
-    v = db.get(WorkflowVersion, wf.current_version_id)
-    if ((v.graph if v else {}).get("trigger") or {}).get("type") != "webhook":
-        raise HTTPException(409, "This workflow is not started by a webhook")
     secret = (vault.read_secret(db, wf.webhook_secret_ref, wf.organization_id) or {}).get("secret")
     if not secret or not timestamp or not signature:
         raise HTTPException(401, "Missing webhook signature")
     try:
         age = abs(time.time() - int(timestamp))
-    except (ValueError, OverflowError):
+    except ValueError:
         raise HTTPException(401, "Bad timestamp")
     if age > SIGNATURE_TOLERANCE_S:
         raise HTTPException(401, "Webhook timestamp outside the 5 minute window")
-    if not hmac.compare_digest(sign(secret, timestamp, body).encode(), signature.encode("utf-8", "replace")):
+    if not hmac.compare_digest(sign(secret, timestamp, body), signature):
         raise HTTPException(401, "Invalid webhook signature")
     did = (delivery_id or signature)[:128]
     try:

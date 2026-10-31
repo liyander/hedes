@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from calendar import timegm
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -107,8 +106,6 @@ def current_principal(request: Request, db: Session = Depends(get_db)) -> Princi
     m = _membership(db, claims.get("sub"), claims.get("org"))
     if not user or user.status != "active" or not m:
         raise HTTPException(401, "Account unavailable")
-    if user.sessions_valid_after and claims.get("iat", 0) < timegm(user.sessions_valid_after.utctimetuple()):
-        raise HTTPException(401, "Session expired")  # issued before a password reset: a stolen cookie must not outlive it
     return Principal(user, m.organization_id, m.role, "session")
 
 

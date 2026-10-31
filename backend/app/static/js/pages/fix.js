@@ -45,8 +45,7 @@ export async function render({ el, params, refreshCounts }) {
     if (!b) return;
     const act = ctx.actions[+b.dataset.i];
     if (act.href) return go(act.href);
-    // request_id: the review this page shows, so a newer version submitted meanwhile is never approved unseen
-    const body = { source_id: act.source_id, minutes: act.minutes, request_id: ctx.approval?.id };
+    const body = { source_id: act.source_id, minutes: act.minutes };
     if (act.needs_comment) {
       const r = await modal({ title: 'Reject the fix', body: '<div class="field"><label>Reason (shown to the requester)</label><textarea name="comment" rows="3" required></textarea></div>',
         actions: [{ label: 'Cancel', value: null }, { label: 'Reject', cls: 'danger-solid', handler: (root) => formData(root).comment.trim() || false }] });

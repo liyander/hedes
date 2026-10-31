@@ -475,9 +475,7 @@ def session_view(db: Session, s: AISession) -> dict:
     msgs = db.scalars(select(AIMessage).where(AIMessage.session_id == s.id).order_by(AIMessage.created_at)).all()
     with _lock:
         running = s.id in _running
-    # "running" in the database but not in this process: the run was cut off (a restart), so it can be retried
-    status = "running" if running else ("failed" if s.status == "running" else s.status)
-    return {"id": s.id, "title": s.title, "status": status, "stage": s.stage,
+    return {"id": s.id, "title": s.title, "status": "running" if running else s.status, "stage": s.stage,
             "requirements": s.requirements, "stages": stages, "stage_order": STAGES,
             "documents": [{"id": d["id"], "name": d["name"], "title": d["catalog"]["title"],
                            "operations": len(d["catalog"]["operations"]), "base_url": d["catalog"].get("base_url")} for d in s.documents or []],

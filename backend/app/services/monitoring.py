@@ -55,12 +55,7 @@ def after_execution(db: Session, ex: Execution, integ: Integration) -> bool:
     since = utcnow() - timedelta(hours=1)
     count = db.scalar(select(func.count()).select_from(Execution).where(
         Execution.version_id == ex.version_id, Execution.error_class == "response_drift", Execution.created_at >= since)) or 0
-    # A repair of this version that failed recently is not retried on every drifted call: each attempt costs an AI call
-    # and raises an alert, and the answer would be the same. "Request repair" still works by hand.
-    failed_recently = db.scalar(select(func.count()).select_from(RepairProposal).where(
-        RepairProposal.integration_id == integ.id, RepairProposal.base_version_id == ex.version_id,
-        RepairProposal.status == "failed", RepairProposal.created_at >= utcnow() - timedelta(hours=6))) or 0
-    return count >= threshold and not failed_recently and open_repair(db, integ.id) is None
+    return count >= threshold and open_repair(db, integ.id) is None
 
 
 def metrics(db: Session, org_id: str, hours: int = 24) -> dict:

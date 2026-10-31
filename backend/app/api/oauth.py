@@ -73,7 +73,7 @@ class StartIn(BaseModel):
 @router.post("/{pid}/start")
 def start(pid: str, body: StartIn, p: Principal = Depends(require_human("user")), db: Session = Depends(get_db)):
     try:
-        url, nonce = oauth.start(db, p.org_id, p.id, pid, body.connection_name or pid, admin=p.at_least("admin"))
+        url, nonce = oauth.start(db, p.org_id, p.id, pid, body.connection_name or pid)
     except oauth.OAuthError as e:
         raise HTTPException(409, str(e))
     resp = JSONResponse({"url": url})

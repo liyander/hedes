@@ -94,6 +94,10 @@ def build_from_template(template_id: str, variables: dict) -> dict:
     return normalize_config(cfg)
 
 
+def needs_base_url(config: dict) -> bool:
+    return "your-domain" in config["integration"]["base_url"]
+
+
 # Official documentation and where to get a credential, for the services the platform ships reference configurations for.
 SERVICE_GUIDES = {
     "github": {"docs": "https://docs.github.com/en/rest",

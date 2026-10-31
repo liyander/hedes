@@ -213,7 +213,6 @@ def fix_details(token: str, p: Principal = Depends(current_principal), db: Sessi
 
 class FixActionIn(BaseModel):
     source_id: str | None = None
-    request_id: str | None = None  # approve/reject: the review the page showed
     comment: str = Field(default="", max_length=4000)
     minutes: int | None = Field(default=None, ge=15, le=10080)
 
@@ -241,8 +240,6 @@ async def fix_action(token: str, action: str, body: FixActionIn, p: Principal = 
         req = whatsapp.context(db, link, p)["approval"]
         if not req or req["decision"] != "pending":
             raise HTTPException(409, "There is no pending approval for this alert any more")
-        if body.request_id != req["id"]:
-            raise HTTPException(409, "A newer version was submitted after this page was opened. Reload it and review that version.")
         if action == "approve":
             a = integrations.approve(db, p.org_id, req["id"], p, body.comment or "Approved from a WhatsApp fix link")
         else:

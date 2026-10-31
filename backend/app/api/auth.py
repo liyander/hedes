@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import secrets
-import threading
 import time
 from collections import defaultdict, deque
 from datetime import timedelta
-from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -22,7 +20,6 @@ from .common import iso, username
 
 router = APIRouter(prefix="/api/v1", tags=["auth & organisation"])
 _FAILS: dict[str, deque] = defaultdict(deque)
-_FAILS_LOCK = threading.Lock()
 
 
 class LoginIn(BaseModel):
@@ -30,29 +27,12 @@ class LoginIn(BaseModel):
     password: str = Field(max_length=200)
 
 
-def _throttle(key: str, limit: int) -> None:
-    now = time.monotonic()
-    with _FAILS_LOCK:
-        if len(_FAILS) > 10_000:  # forget idle entries, so a stream of made-up usernames cannot grow this without bound
-            for k in [k for k, q in _FAILS.items() if not q or now - q[-1] > 300]:
-                del _FAILS[k]
-        q = _FAILS[key]
-        while q and now - q[0] > 300:
-            q.popleft()
-        if len(q) >= limit:
-            raise HTTPException(429, "Too many failed sign-in attempts. Wait a few minutes.")
-
-
-def _failed(*keys: str) -> None:
-    with _FAILS_LOCK:
-        for key in keys:
-            _FAILS[key].append(time.monotonic())
-
-
-@lru_cache(maxsize=1)
-def _dummy_hash() -> str:
-    """Checked when the account does not exist, so the response time does not reveal which usernames exist."""
-    return hash_password(secrets.token_urlsafe(16))
+def _throttle(key: str) -> None:
+    q, now = _FAILS[key], time.monotonic()
+    while q and now - q[0] > 300:
+        q.popleft()
+    if len(q) >= 8:
+        raise HTTPException(429, "Too many failed sign-in attempts. Wait a few minutes.")
 
 
 def _set_cookie(resp: Response, token: str) -> None:
@@ -68,21 +48,17 @@ def me_view(db: Session, p: Principal) -> dict:
 
 @router.post("/auth/login")
 def login(body: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
+    key = f"{request.client.host if request.client else '-'}:{body.username.lower()}"
+    _throttle(key)
     ident = body.username.strip().lower()
-    # Per address and account, plus a higher cap per account: behind a proxy the client address can be rotated or forged.
-    key, account_key = f"{request.client.host if request.client else '-'}:{ident}", f"*:{ident}"
-    _throttle(key, 8)
-    _throttle(account_key, 30)
     user = db.scalars(select(User).where(or_(User.username == ident, User.email == ident))).first()
-    password_ok = verify_password(body.password, user.password_hash if user else _dummy_hash())
-    if not user or user.status != "active" or not password_ok:
-        _failed(key, account_key)
+    if not user or user.status != "active" or not verify_password(body.password, user.password_hash):
+        _FAILS[key].append(time.monotonic())
         raise HTTPException(401, "Incorrect username or password")
     m = db.scalars(select(Membership).where(Membership.user_id == user.id)).first()
     if not m:
         raise HTTPException(403, "This account is not a member of any organisation")
-    with _FAILS_LOCK:
-        _FAILS.pop(key, None)
+    _FAILS.pop(key, None)
     _set_cookie(response, issue_session(user.id, m.organization_id))
     audit.record(db, m.organization_id, user, "auth.login", user.username)
     db.commit()

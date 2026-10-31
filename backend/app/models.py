@@ -33,8 +33,6 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(16), default="active")
     created_at: Mapped[datetime] = created()
-    # Sessions issued before this are refused (set when the password is reset or the account is disabled).
-    sessions_valid_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Organization(Base):

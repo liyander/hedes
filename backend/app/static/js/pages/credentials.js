@@ -140,10 +140,7 @@ export async function render({ el, params = [] }) {
 
   $('#new', el).addEventListener('click', async () => { if (await connectModal()) route(); });
   // back from the provider: #/credentials/connected/<provider> or #/credentials/oauth-error/<message>
-  if (params[0] === 'oauth-error') {
-    history.replaceState(null, '', '#/credentials');  // shown once, not again after every Test, Rotate or Revoke
-    toast(`Sign-in failed: ${params[1] || 'unknown error'}`, 'bad');
-  }
+  if (params[0] === 'oauth-error') toast(`Sign-in failed: ${params[1] || 'unknown error'}`, 'bad');
   if (params[0] === 'connected') {
     const pr = providers.find((x) => x.id === params[1]);
     history.replaceState(null, '', '#/credentials');
