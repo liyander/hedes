@@ -8,7 +8,7 @@ const TOOL_LABEL = {
   run_source: 'Run a data source now', test_source: 'Test a data source (fetch one page, store nothing)', set_source: 'Change a data source',
   reset_source: 'Re-read full history', reprocess_dead_letter: 'Reprocess a rejected record', run_tool: 'Run a tool', create_integration: 'Create a draft integration',
   create_from_template: 'Create an integration from a template', run_integration_tests: 'Run safe tests', submit_integration: 'Submit for administrator review',
-  set_connection_expiry: 'Set credential expiry', start_build_session: 'Start an AI Studio build session',
+  set_connection_expiry: 'Set credential expiry', fix_integration: 'Fix the integration (revise, test, verify the endpoint, publish)', start_build_session: 'Start an AI Studio build session',
 };
 const SUGGESTIONS = [
   'What can I do on this page?',

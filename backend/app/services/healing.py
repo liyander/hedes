@@ -96,6 +96,8 @@ def _auto_apply(db: Session, case: HealingCase, integ: Integration, live: Integr
     if not fix or not case.approval_request_id:
         return
     reasons = critical_reasons(live.config, fix.config, fix)
+    if (case.evidence or {}).get("unverified_fix"):
+        reasons.append("the corrected endpoint could not be confirmed to exist")
     if reasons:
         log_event(case, "auto_skip", "Automatic mode is on, but this fix is critical, so it waits for an administrator: " + "; ".join(reasons))
         case.required = [f"Approve or reject version {fix.version} in Approvals (critical: {'; '.join(reasons)})."]
@@ -109,6 +111,9 @@ def _auto_apply(db: Session, case: HealingCase, integ: Integration, live: Integr
         return
     log_event(case, "auto_applied", f"Published version {fix.version} automatically (non-critical: same host, authentication, methods and inputs)", True)
     ok, detail = _probe(db, integ, fix)
+    fixed_op = next((o for o in fix.config["integration"]["operations"] if o["id"] == (case.evidence or {}).get("fixed_operation")), None)
+    if ok is None and fixed_op:
+        ok, detail = endpoint_exists(db, integ, fix.config, fixed_op)
     if ok is False:
         try:
             integrations.rollback(db, case.organization_id, integ, live.id, AUTO)
@@ -151,6 +156,11 @@ def on_failure(db: Session, ex: Execution, integ: Integration, force: bool = Fal
         case.occurrences += 1
         case.evidence = {**(case.evidence or {}), "last_execution_id": ex.id, "last_error": ex.error[:500]}
         log_event(case, "recurred", f"The same failure happened again (occurrence {case.occurrences}): {ex.error[:300]}")
+        # Look again when something changed (a new version went live) or the last look is stale; otherwise just count it.
+        changed = (case.evidence or {}).get("version") != (db.get(IntegrationVersion, integ.published_version_id).version if integ.published_version_id else None)
+        if case.status == "needs_admin" and (changed or case.updated_at < utcnow() - timedelta(minutes=10)):
+            case.execution_id, case.endpoint = ex.id, _endpoint(ex)
+            _queue(db, case)
         return case
     case = HealingCase(organization_id=ex.organization_id, integration_id=integ.id, execution_id=ex.id, target=ex.tool_name or integ.name,
                        error_class=ex.error_class or "unknown", endpoint=_endpoint(ex), log=[], runs=0)
@@ -284,26 +294,121 @@ def _documented_paths(db: Session, integ: Integration, method: str) -> list[str]
     return list(dict.fromkeys(paths))
 
 
+def endpoint_exists(db: Session, integ: Integration, config: dict, op: dict) -> tuple[bool | None, str]:
+    """Does this operation's URL exist? A harmless GET (no body) - a 404/410 means no, anything else (even 401/405) means yes.
+    None when the path has parameters that cannot be filled in without real inputs."""
+    import httpx
+
+    from . import egress
+    integ_cfg = config["integration"]
+    if "{" in op["path"]:
+        return None, "the path has parameters, so it cannot be checked without real inputs"
+    url = integ_cfg["base_url"].rstrip("/") + op["path"]
+    try:
+        egress.check_url(url, integrations.org_policy(db, integ.organization_id).get("allowed_domains") or [])
+    except egress.EgressDenied as e:
+        return False, f"{url} is not allowed: {e}"
+    req = engine.PreparedRequest("GET", url, {}, {k: str(v) for k, v in (integ_cfg.get("default_headers") or {}).items()})
+    auth = integ_cfg.get("authentication") or {}
+    if auth.get("type") in ("bearer", "api_key_header", "api_key_query", "basic", "ssws"):
+        try:
+            engine.apply_auth(req, auth, runtime.credential_for(db, integ.organization_id, config))
+        except engine.EngineError:
+            pass  # without the credential a real endpoint still answers 401/403, not 404
+    try:
+        r = httpx.get(url, params=req.query, headers=req.headers, timeout=10, follow_redirects=False)
+    except httpx.HTTPError as e:
+        return False, f"{url} could not be reached ({type(e).__name__})"
+    if r.status_code in (404, 410):
+        return False, f"{url} answers HTTP {r.status_code}"
+    return True, f"{url} exists (HTTP {r.status_code} to a harmless GET)"
+
+
+def _reference_configs(db: Session, integ: Integration) -> list[tuple[str, dict]]:
+    """Known-good configurations for this service: the bundled catalogue entry or source template with the same id."""
+    out = []
+    ref = catalog.known_services().get(integ.slug)
+    if ref:
+        out.append(("the built-in reference configuration", ref))
+    tpl = next((d for d in catalog._raw_templates().values() if d["integration"]["id"] == integ.slug), None)
+    if tpl and "{{" not in tpl["integration"]["base_url"]:
+        out.append(("its source template", {k: v for k, v in tpl.items() if k != "template"}))
+    return out
+
+
+def _ai_endpoint_guess(db: Session, case: HealingCase, integ: Integration, config: dict, op: dict) -> dict | None:
+    schema = {"type": "object", "required": ["base_url", "path", "reason"], "properties": {
+        "base_url": {"type": "string", "pattern": "^https://[^\\s]+$"}, "path": {"type": "string", "pattern": "^/[^\\s]*$"},
+        "reason": {"type": "string", "maxLength": 400}}}
+    prompt = (f"Service: {integ.name} ({integ.description[:300]})\nConfigured base URL: {config['integration']['base_url']}\n"
+              f"Operation {op['id']}: {op['method']} {op['path']} - {op.get('description', '')}\nFailing request: {case.endpoint.get('method', '')} "
+              f"{case.endpoint.get('url', '')} -> {case.error_class} (HTTP {case.endpoint.get('http_status') or '?'})\n"
+              f"Response excerpt (untrusted): {(case.evidence or {}).get('error', '')[:300]}")
+    system = ("You correct API endpoint URLs. Given a request that returned 404, give the most likely correct base URL and path for this "
+              "operation of this public API, keeping the same service and host unless the host itself is clearly wrong. "
+              "Only answer with an endpoint you know this API documents.")
+    try:
+        res = Gateway(db, case.organization_id).structured("repair", system, prompt, schema, local=lambda: None, allow_local=False)
+    except ProviderError:
+        return None
+    return res.data if isinstance(res.data, dict) else None
+
+
 def _fix_endpoint(db: Session, case: HealingCase, integ: Integration, live: IntegrationVersion, op_id: str) -> bool:
+    """Find a corrected base URL / path, prove it exists with a harmless request, then prepare the fix.
+    Candidates come from the API documentation, the built-in reference configuration, and finally the AI."""
     config = copy.deepcopy(live.config)
     op = next((o for o in config["integration"]["operations"] if o["id"] == op_id), None)
     if not op:
         return False
+    current = (config["integration"]["base_url"].rstrip("/"), op["path"])
+    candidates: list[tuple[str, str, str]] = []  # (base_url, path, where it came from)
     documented = _documented_paths(db, integ, op["method"])
-    if not documented:
-        _try(case, "Looked for the API documentation this integration was built from", "None is on record (no OpenAPI document or template).", False)
-        return False
-    if op["path"] in documented:
-        _try(case, f"Compared {op['method']} {op['path']} with the documentation", "The path matches the documentation, so the request itself is not the problem.", False)
-        return False
-    close = difflib.get_close_matches(op["path"], documented, n=1, cutoff=0.75)
-    if not close:
-        _try(case, f"Compared {op['method']} {op['path']} with the documentation", f"It is not documented and no similar documented path exists ({len(documented)} checked).", False)
-        return False
-    _try(case, f"Compared {op['method']} {op['path']} with the documentation", f"The documented path is {close[0]}.", True)
-    op["path"] = close[0]
-    return _propose(db, case, integ, live, config, f"Self-healing: {op_id} called {case.endpoint.get('url', '')} which returned {case.error_class}; "
-                                                   f"the documented path is {close[0]}.")
+    if documented:
+        close = difflib.get_close_matches(op["path"], documented, n=1, cutoff=0.75)
+        if close and close[0] != op["path"]:
+            candidates.append((current[0], close[0], "the API documentation"))
+    for label, ref in _reference_configs(db, integ):
+        ref_op = next((o for o in ref["integration"]["operations"] if o["id"] == op_id), None)
+        if ref_op:
+            candidates.append((ref["integration"]["base_url"].rstrip("/"), ref_op["path"], label))
+    guess = _ai_endpoint_guess(db, case, integ, config, op)
+    if guess:
+        candidates.append((guess["base_url"].rstrip("/"), guess["path"], f"the AI ({guess.get('reason', '')[:200]})"))
+    seen = {current}
+    tried = 0
+    for base, path, source in candidates:
+        if (base, path) in seen:
+            continue
+        seen.add((base, path))
+        trial = copy.deepcopy(config)
+        trial["integration"]["base_url"] = base
+        trial_op = next(o for o in trial["integration"]["operations"] if o["id"] == op_id)
+        trial_op["path"] = path
+        ok, detail = endpoint_exists(db, integ, trial, trial_op)
+        tried += 1
+        _try(case, f"Checked {op['method']} {base}{path} suggested by {source}", detail, bool(ok))
+        if ok:
+            case.evidence = {**(case.evidence or {}), "fixed_operation": op_id, "unverified_fix": False}
+            what = (f"base URL {current[0]} -> {base}" if base != current[0] else "") + (" and " if base != current[0] and path != op["path"] else "") + \
+                   (f"path {op['path']} -> {path}" if path != op["path"] else "")
+            return _propose(db, case, integ, live, trial, f"Self-healing: {op_id} called {case.endpoint.get('url', '')} which returned {case.error_class}; "
+                                                          f"corrected the {what} (from {source.split(' (')[0]}), verified the endpoint exists.")
+    documented_first = next(((b, p, src) for b, p, src in candidates if src == "the API documentation"), None)
+    if documented_first:
+        # The documentation is authoritative even when the endpoint cannot be confirmed from here (e.g. it rejects GET):
+        # prepare it for an administrator, but never publish it automatically.
+        base, path, _ = documented_first
+        trial = copy.deepcopy(config)
+        trial["integration"]["base_url"] = base
+        next(o for o in trial["integration"]["operations"] if o["id"] == op_id)["path"] = path
+        case.evidence = {**(case.evidence or {}), "fixed_operation": op_id, "unverified_fix": True}
+        return _propose(db, case, integ, live, trial, f"Self-healing: {op_id} called {case.endpoint.get('url', '')} which returned {case.error_class}; "
+                                                      f"the documented path is {path} (it could not be confirmed with a harmless request).")
+    if not tried:
+        _try(case, "Looked for a corrected endpoint (API documentation, built-in reference, AI)",
+             "No different endpoint was found to try." + ("" if guess else " No AI provider was available to suggest one."), False)
+    return False
 
 
 def _relax_rate_limit(db: Session, case: HealingCase, integ: Integration, live: IntegrationVersion, op_id: str) -> bool:

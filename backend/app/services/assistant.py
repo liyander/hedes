@@ -59,6 +59,9 @@ TOOLS: dict[str, tuple[bool, str, tuple, str]] = {
     "run_integration_tests": (True, "user", ("integration_id",), "Run the safe (non-network) tests for an integration's latest version."),
     "submit_integration": (True, "user", ("integration_id",), "Submit the latest version for administrator review."),
     "set_connection_expiry": (True, "user", ("connection_id",), "Set or clear (null) a credential's expiry date. args: connection_id, expires_at (ISO date)."),
+    "fix_integration": (True, "admin", ("integration_id",), "Correct a published integration's base_url and/or operation paths "
+                        "(args: integration_id, base_url optional, paths optional {operation_id: new_path}). Creates a revision, runs the safe tests, "
+                        "checks with a harmless request that each corrected endpoint exists, then publishes it and closes matching self-healing sessions."),
     "start_build_session": (True, "user", ("message",), "Open an AI Studio build session that drafts an integration from a description."),
     "request_credential": (False, "user", ("name", "auth_type"), "Show the user a secure form to connect a credential (you never see the secret). "
                            "args: name (the integration's credential_ref), auth_type, header_name (optional), template_id (optional, adds the provider's instructions)."),
@@ -90,6 +93,8 @@ How you work:
 - You cannot approve or publish integrations, rotate or reveal secrets, or change policy. If asked, explain who can (an administrator).
 - Never ask the user to paste secrets into chat. When a credential is needed, call request_credential with the integration's
   credential_ref and auth type: the user gets a secure form whose secret goes straight to the vault (env:NAME also works).
+- When the user asks you to fix an integration whose endpoint or base URL is wrong (HTTP 404 / not_found), look at it first
+  (get_integration), then propose fix_integration with the concrete corrected base_url and/or paths. Do not just describe the fix.
 - Connecting a provider: first check list_source_templates. If a template exists, call get_source_template and follow its
   credential instructions and setup steps exactly, linking its docs. If none exists, write the steps from the API documentation
   the user gave you (or your general knowledge) and start that guide with "AI-generated guide - verify against <provider>'s documentation."
@@ -408,6 +413,8 @@ def execute_action(db: Session, p: Principal, act: AssistantAction) -> Any:
                 raise HTTPException(422, "expires_at must be a date such as 2027-01-31")
             c.expires_at = dt
         return {"connection": c.name, "expires_at": str(c.expires_at or "never")}
+    if name == "fix_integration":
+        return _fix_integration(db, p, a)
     if name == "start_build_session":
         from . import orchestrator
         s = AISession(user_id=p.id, organization_id=p.org_id, state={"stages": {}})
@@ -416,6 +423,62 @@ def execute_action(db: Session, p: Principal, act: AssistantAction) -> Any:
         orchestrator.handle_message(db, s, str(a["message"])[:8000])
         return {"session_id": s.id, "open": f"#/studio/{s.id}"}
     raise HTTPException(400, f"Unknown action {name}")
+
+
+def _fix_integration(db: Session, p: Principal, a: dict) -> dict:
+    import copy
+
+    from . import healing
+    from ..models import HealingCase
+    integ = _find_integration(db, p, str(a["integration_id"]))
+    live = db.get(IntegrationVersion, integ.published_version_id) if integ.published_version_id else None
+    if not live:
+        raise HTTPException(409, "The integration has no published version to correct")
+    cfg = copy.deepcopy(live.config)
+    changed_ops: list[str] = []
+    if a.get("base_url"):
+        base = str(a["base_url"]).strip().rstrip("/")
+        from . import egress
+        if not re.fullmatch(r"https?://[^\s]+", base):
+            raise HTTPException(422, "base_url must be an http(s) URL")
+        try:
+            egress.static_check(base + "/")
+        except egress.EgressDenied as e:
+            raise HTTPException(422, f"base_url is not allowed: {e}")
+        cfg["integration"]["base_url"] = base
+        changed_ops = [o["id"] for o in cfg["integration"]["operations"]]
+    for op_id, path in (a.get("paths") or {}).items():
+        op = next((o for o in cfg["integration"]["operations"] if o["id"] == op_id), None)
+        if not op:
+            raise HTTPException(422, f"Unknown operation {op_id!r}")
+        if not isinstance(path, str) or not path.startswith("/") or re.search(r"\s", path):
+            raise HTTPException(422, f"Path for {op_id} must start with / and contain no spaces")
+        op["path"] = path
+        changed_ops.append(op_id)
+    if cfg == live.config:
+        raise HTTPException(422, "Nothing would change: give a different base_url or paths")
+    v = integrations.revise(db, integ, live, p, cfg, source="manual", notes="Corrected through the AI assistant")
+    if not v.validation.get("valid"):
+        return {"published": False, "version": v.version, "reason": "validation failed", "errors": [e["message"] for e in v.validation.get("errors", [])[:5]]}
+    tr = integrations.run_tests(db, v, p)
+    if tr.result != "passed":
+        return {"published": False, "version": v.version, "reason": f"safe tests failed ({tr.report['passed']}/{tr.report['total']})"}
+    checks = []
+    for op in cfg["integration"]["operations"]:
+        if op["id"] in set(changed_ops):
+            ok, detail = healing.endpoint_exists(db, integ, cfg, op)
+            checks.append({"operation": op["id"], "exists": ok, "detail": detail})
+            if ok is False:
+                return {"published": False, "version": v.version, "reason": f"{op['id']}: {detail}", "checks": checks,
+                        "note": "The draft is kept; nothing was published."}
+    req = integrations.submit_for_review(db, v, integ, p)
+    integrations.approve(db, p.org_id, req.id, p, comment="Approved in the AI assistant")
+    closed = 0
+    for case in db.scalars(select(HealingCase).where(HealingCase.integration_id == integ.id, HealingCase.status.in_(healing.OPEN))).all():
+        case.status, case.resolved_at, case.required = "resolved", utcnow(), []
+        healing.log_event(case, "fix_decision", f"{p.user.username} applied a corrected version {v.version} through the AI assistant; it is now live", True)
+        closed += 1
+    return {"published": True, "version": v.version, "checks": checks, "self_healing_sessions_closed": closed}
 
 
 # ----------------------------------------------------------------------------------------------- chat
@@ -529,7 +592,8 @@ def _respond(db: Session, p: Principal, thread: AssistantThread, gw: Gateway, pa
     meta = {"model": result.model, "looked_up": looked_up, "page": page or ""}
     if cred_requests:
         meta["credential_requests"] = cred_requests
-    msg = AssistantMessage(thread_id=thread.id, role="assistant", content=(data.get("reply") or "").strip() or "Done.", meta=meta)
+    from .ai_gateway import strip_wrappers
+    msg = AssistantMessage(thread_id=thread.id, role="assistant", content=strip_wrappers(data.get("reply") or "") or "Done.", meta=meta)
     db.add(msg)
     db.flush()
     for c in calls[:3]:

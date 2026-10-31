@@ -58,6 +58,14 @@ class AIResult:
     attempts: list = field(default_factory=list)
 
 
+_WRAPPER = re.compile(r"</?untrusted_document[^>]*>", re.I)
+
+
+def strip_wrappers(text: str) -> str:
+    """Models sometimes echo the <untrusted_document> markers they were given; never show those to people."""
+    return _WRAPPER.sub("", text or "").strip()
+
+
 def redact_ai_context(text: str) -> str:
     """Strip anything that looks like a credential before it can reach any model."""
     for rx, label in SECRET_PATTERNS:
@@ -449,7 +457,7 @@ class Gateway:
                 self._local_record(task, m, p)
                 return result
             try:
-                result.text = self.call_model(m, p, task, system, messages, False)
+                result.text = strip_wrappers(self.call_model(m, p, task, system, messages, False))
                 result.model, result.provider = label, p.name
                 return result
             except ProviderError as e:

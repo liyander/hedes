@@ -18,6 +18,8 @@ _paths = iter(range(2, 100))
 def _case_with_fix(org_id, integ_id, monkeypatch):
     path = f"/messages/v{next(_paths)}"           # always different from the live path, whatever earlier tests published
     monkeypatch.setattr(healing, "_documented_paths", lambda db, integ, method: [path])
+    monkeypatch.setattr(healing, "endpoint_exists", lambda db, integ, cfg, op: (True, "exists (stubbed)"))
+    monkeypatch.setattr(healing, "_ai_endpoint_guess", lambda *a, **k: None)
     with session_scope() as db:
         ex = Execution(organization_id=org_id, integration_id=integ_id, tool_name="notify.send_message", status="failed", error_class="not_found",
                        http_status=404, error="HTTP 404", actor_type="workflow", request_preview={"method": "POST", "url": "http://x/mock/notify/messages"})

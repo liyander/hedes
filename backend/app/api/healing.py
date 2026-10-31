@@ -9,6 +9,7 @@ from ..core.db import get_db
 from ..core.security import Principal, current_principal, require_human, require_role
 from ..models import ApprovalRequest, Execution, HealingCase, Integration, IntegrationVersion
 from ..services import healing
+from ..services.ai_gateway import strip_wrappers
 from .common import iso, like_pattern
 
 router = APIRouter(prefix="/api/v1", tags=["self-healing"])
@@ -21,7 +22,7 @@ def _duration_s(c: HealingCase) -> int | None:
 
 def case_view(c: HealingCase, db: Session | None = None, full: bool = False) -> dict:
     out = {"id": c.id, "target": c.target, "error_class": c.error_class, "status": c.status, "root_cause": c.root_cause,
-           "analysis": c.analysis, "attempts": c.attempts or [], "required": c.required or [], "endpoint": c.endpoint or {},
+           "analysis": strip_wrappers(c.analysis), "attempts": c.attempts or [], "required": c.required or [], "endpoint": c.endpoint or {},
            "still_failing": c.still_failing, "occurrences": c.occurrences, "integration_id": c.integration_id, "workflow_id": c.workflow_id,
            "execution_id": c.execution_id, "approval_request_id": c.approval_request_id, "evidence": c.evidence or {}, "model": c.model,
            "runs": c.runs or (1 if c.attempts or c.root_cause else 0), "resolved_at": iso(c.resolved_at), "duration_s": _duration_s(c),
