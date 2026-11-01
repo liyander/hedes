@@ -1,0 +1,264 @@
+1
+00:00:00,496 --> 00:00:03,036
+Teams glue together dozens of SaaS APIs.
+
+2
+00:00:03,056 --> 00:00:05,916
+When one of them changes, or a token expires,
+
+3
+00:00:05,936 --> 00:00:07,772
+someone finds out days later.
+
+4
+00:00:08,700 --> 00:00:09,557
+Meet H.A.D.E.S.
+
+5
+00:00:09,577 --> 00:00:11,956
+Describe an integration in plain English.
+
+6
+00:00:11,976 --> 00:00:14,179
+The AI builds it, a human approves it,
+
+7
+00:00:14,199 --> 00:00:16,226
+and the platform runs it, heals it,
+
+8
+00:00:16,246 --> 00:00:18,976
+and lets you manage it from Slack and WhatsApp.
+
+9
+00:00:20,721 --> 00:00:24,164
+The dashboard shows what's live, what needs a decision,
+
+10
+00:00:24,184 --> 00:00:25,360
+and overall health.
+
+11
+00:00:25,380 --> 00:00:30,397
+One rule runs everything: AI plans, deterministic code executes, humans approve.
+
+12
+00:00:31,707 --> 00:00:34,855
+In AI Studio, I load a task-management API spec,
+
+13
+00:00:34,875 --> 00:00:36,967
+and describe the outcome I want.
+
+14
+00:00:39,524 --> 00:00:42,620
+The AI extracts the services, operations and trigger.
+
+15
+00:00:42,640 --> 00:00:46,440
+Before generating, it shows exactly which records it will create.
+
+16
+00:00:46,662 --> 00:00:47,802
+The pipeline runs.
+
+17
+00:00:47,822 --> 00:00:52,377
+API discovery, a declarative config instead of code, schema validation,
+
+18
+00:00:52,397 --> 00:00:55,856
+a security review, and safe tests on mocked responses.
+
+19
+00:00:55,876 --> 00:00:58,498
+Six of six pass, and it goes to approval.
+
+20
+00:00:58,976 --> 00:01:02,512
+Credentials go through a secure form into an encrypted vault.
+
+21
+00:01:02,532 --> 00:01:03,852
+The AI never sees them.
+
+22
+00:01:07,432 --> 00:01:12,382
+The admin sees every check: domain, schema, secrets, credential, tests,
+
+23
+00:01:12,402 --> 00:01:13,922
+and an unchanged hash.
+
+24
+00:01:13,942 --> 00:01:16,512
+Approval publishes exactly that hash.
+
+25
+00:01:16,532 --> 00:01:19,172
+The AI can never approve its own work.
+
+26
+00:01:20,709 --> 00:01:22,945
+The request also drafted a workflow:
+
+27
+00:01:22,965 --> 00:01:25,388
+a graph of steps that can run manually,
+
+28
+00:01:25,408 --> 00:01:27,581
+on a signed webhook, on a schedule,
+
+29
+00:01:27,601 --> 00:01:31,153
+or automatically on a failure, an alert, or a new record.
+
+30
+00:01:32,869 --> 00:01:36,329
+A dry run renders every request without sending anything.
+
+31
+00:01:38,384 --> 00:01:42,983
+Data sources pull from Okta, CloudTrail, Google, Microsoft, GitHub,
+
+32
+00:01:43,003 --> 00:01:45,603
+Jira and more, into one common format,
+
+33
+00:01:45,623 --> 00:01:48,636
+with de-duplication and a dead-letter queue.
+
+34
+00:01:50,196 --> 00:01:51,246
+Now, self-healing.
+
+35
+00:01:51,266 --> 00:01:53,030
+I set it to fix automatically,
+
+36
+00:01:53,050 --> 00:01:55,528
+then simulate the vendor changing its API.
+
+37
+00:01:55,753 --> 00:01:57,969
+The next call fails with response drift.
+
+38
+00:01:57,989 --> 00:02:00,485
+A field the integration depends on has moved.
+
+39
+00:02:03,760 --> 00:02:07,725
+H.A.D.E.S opens a case, collects evidence, finds the root cause,
+
+40
+00:02:07,745 --> 00:02:11,772
+remaps the field, and publishes version one point zero point one,
+
+41
+00:02:11,792 --> 00:02:13,453
+after validation and tests.
+
+42
+00:02:13,473 --> 00:02:14,761
+Every step is logged.
+
+43
+00:02:14,781 --> 00:02:17,252
+Critical fixes always wait for an admin.
+
+44
+00:02:22,090 --> 00:02:26,011
+Monitoring tracks success rate, latency and error classes,
+
+45
+00:02:26,031 --> 00:02:28,118
+with every repair in one place.
+
+46
+00:02:30,228 --> 00:02:32,692
+From Slack, reply under a failure alert,
+
+47
+00:02:32,712 --> 00:02:35,920
+and the AI investigates and explains the root cause.
+
+48
+00:02:36,395 --> 00:02:37,826
+Ask it to fix the problem,
+
+49
+00:02:37,846 --> 00:02:40,448
+and H.A.D.E.S posts Approve and Reject buttons.
+
+50
+00:02:40,468 --> 00:02:42,567
+Only the person who asked can approve.
+
+51
+00:02:43,041 --> 00:02:47,053
+On WhatsApp, admins get personal alerts with one-tap fix links,
+
+52
+00:02:47,073 --> 00:02:48,013
+plus a chatbot.
+
+53
+00:02:49,933 --> 00:02:52,642
+In the app, the assistant answers from live data,
+
+54
+00:02:52,662 --> 00:02:55,649
+and every change it proposes becomes an approval card.
+
+55
+00:02:57,216 --> 00:03:01,818
+Bring any model: Bedrock, Gemini, OpenAI, Anthropic, Groq, Ollama,
+
+56
+00:03:01,838 --> 00:03:04,830
+routed per task with budgets and fallbacks.
+
+57
+00:03:04,850 --> 00:03:08,332
+A built-in offline model powered this entire demo.
+
+58
+00:03:09,776 --> 00:03:13,165
+The tool registry sets which roles may run each tool,
+
+59
+00:03:13,185 --> 00:03:16,380
+and which tools are exposed to AI agents over MCP.
+
+60
+00:03:16,604 --> 00:03:19,729
+Versions are immutable, with one-click rollback,
+
+61
+00:03:19,749 --> 00:03:23,528
+and the audit log records every action, by people, the AI,
+
+62
+00:03:23,548 --> 00:03:24,576
+agents and chat.
+
+63
+00:03:26,016 --> 00:03:26,635
+H.A.D.E.S.
+
+64
+00:03:26,655 --> 00:03:29,193
+AI plans, code executes, humans approve.
+
+65
+00:03:29,213 --> 00:03:33,477
+Live on Zoho Catalyst, with a hundred and ninety-two passing tests.
+
+66
+00:03:33,497 --> 00:03:34,756
+Thanks for watching.
+
